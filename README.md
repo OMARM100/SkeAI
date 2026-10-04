@@ -16,9 +16,49 @@ The first goal is intentionally small: build and understand a lightweight Arabic
 
 ## Current stage
 
-**SkeAI 0.1 — Foundation**
+**SkeAI 0.1 — Tiny character language model**
 
-At this stage the repository contains the project structure only. The neural network, tokenizer, training loop, and language model will be implemented incrementally.
+The project now includes:
+
+- A character-level Arabic/English tokenizer.
+- A from-scratch tensor engine.
+- Dense, ReLU, and Tanh layers.
+- Cross-entropy and mean-squared-error losses.
+- SGD optimization.
+- A sequential neural network.
+- A tiny fixed-context character language model.
+- A bilingual toy corpus.
+- Text generation.
+- JSON model checkpoints with resume training.
+- Automated Python tests through GitHub Actions.
+
+This model is intentionally small. It is a learning and engineering milestone, not a general-purpose assistant.
+
+## Run training
+
+From the repository root:
+
+```bash
+python -m training.train_tiny
+```
+
+The model is saved to:
+
+```text
+models/tiny_character_model.json
+```
+
+To continue training from the saved checkpoint:
+
+```bash
+python -m training.train_tiny --resume
+```
+
+To run the tests locally:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Planned architecture
 
@@ -29,13 +69,21 @@ Tokenizer
   ↓
 Tokens
   ↓
-Embeddings
+Context Builder
   ↓
 Neural Network
   ↓
-Prediction
+Logits
   ↓
-Text generation
+Loss
+  ↓
+Backpropagation
+  ↓
+Optimizer
+  ↓
+Updated Weights
+  ↓
+Text Generation
 ```
 
 ## Development roadmap
@@ -46,11 +94,13 @@ Text generation
 4. Basic neural network layers
 5. Loss and optimizer
 6. Training loop
-7. Text generation
-8. Arabic/English language experiments
-9. Small Transformer
-10. Mobile optimization
-11. SkeOS integration
+7. Tiny character language model
+8. Checkpointing and resume training
+9. Better Arabic/English dataset
+10. Improved tokenization
+11. Small Transformer
+12. Mobile optimization
+13. SkeOS integration
 
 ## Philosophy
 
