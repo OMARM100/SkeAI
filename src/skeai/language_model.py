@@ -1,13 +1,11 @@
-"""A tiny character-level language model for SkeAI 0.1.
-
-This is intentionally not a Transformer. It is a small fixed-context neural
-language model used to prove the full learning/generation pipeline first.
-"""
+"""A tiny character-level language model for SkeAI 0.1."""
 
 from __future__ import annotations
 
+import json
 import random
-from typing import List
+from pathlib import Path
+from typing import Any, List
 
 from .layers import Dense, Tanh
 from .model import Sequential
@@ -30,6 +28,7 @@ class TinyCharacterLanguageModel:
 
         self.tokenizer = tokenizer
         self.context_length = context_length
+        self.hidden_size = hidden_size
 
         input_size = context_length * tokenizer.vocab_size
 
@@ -110,6 +109,69 @@ class TinyCharacterLanguageModel:
                 break
 
         return self.tokenizer.decode(token_ids)
+
+    def save_checkpoint(self, path: str | Path) -> None:
+        """Save tokenizer and model state as a portable JSON checkpoint."""
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "format": "skeai-checkpoint",
+            "version": 1,
+            "model": {
+                "type": "tiny-character-language-model",
+                "context_length": self.context_length,
+                "hidden_size": self.hidden_size,
+                "tokenizer": {
+                    "type": "character",
+                    "vocabulary": self.tokenizer.id_to_token,
+                },
+                "state": self.network.state_dict(),
+            },
+        }
+
+        with output_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False)
+
+    @classmethod
+    def load_checkpoint(
+        cls,
+        path: str | Path,
+    ) -> "TinyCharacterLanguageModel":
+        input_path = Path(path)
+
+        with input_path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+
+        if payload.get("format") != "skeai-checkpoint":
+            raise ValueError("Unsupported SkeAI checkpoint format.")
+        if payload.get("version") != 1:
+            raise ValueError("Unsupported SkeAI checkpoint version.")
+
+        model_data = payload.get("model", {})
+        if model_data.get("type") != "tiny-character-language-model":
+            raise ValueError("Unsupported SkeAI model type.")
+
+        tokenizer_data = model_data.get("tokenizer", {})
+        vocabulary = tokenizer_data.get("vocabulary")
+        if not isinstance(vocabulary, list):
+            raise ValueError("Checkpoint vocabulary is invalid.")
+
+        tokenizer = CharacterTokenizer(vocabulary)
+
+        model = cls(
+            tokenizer=tokenizer,
+            context_length=int(model_data["context_length"]),
+            hidden_size=int(model_data["hidden_size"]),
+            seed=123,
+        )
+
+        state = model_data.get("state")
+        if not isinstance(state, dict):
+            raise ValueError("Checkpoint state is invalid.")
+
+        model.network.load_state_dict(state)
+        return model
 
 
 __all__ = ["TinyCharacterLanguageModel"]
