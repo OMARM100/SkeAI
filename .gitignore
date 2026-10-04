@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+
+# Training outputs
+models/*.bin
+models/*.pt
+models/*.pth
+models/*.safetensors
+
+# Local datasets
+data/local/
+data/cache/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
