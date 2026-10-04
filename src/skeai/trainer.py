@@ -40,6 +40,34 @@ class Trainer:
 
         return loss_value
 
+    def train_batches(
+        self,
+        batches,
+        epochs: int,
+        *,
+        callback: Callable[[int, int, float], None] | None = None,
+    ) -> List[float]:
+        """Train repeatedly over an iterable of (inputs, targets) batches."""
+        if epochs <= 0:
+            raise ValueError("epochs must be greater than zero.")
+
+        history: List[float] = []
+
+        for epoch in range(1, epochs + 1):
+            epoch_losses: List[float] = []
+            for batch_index, (inputs, targets) in enumerate(batches, start=1):
+                loss_value = self.train_step(inputs, targets)
+                epoch_losses.append(loss_value)
+                if callback is not None:
+                    callback(epoch, batch_index, loss_value)
+
+            if not epoch_losses:
+                raise ValueError("Training batches cannot be empty.")
+
+            history.append(sum(epoch_losses) / len(epoch_losses))
+
+        return history
+
     def train(
         self,
         inputs: Tensor,
