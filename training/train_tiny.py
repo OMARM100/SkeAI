@@ -3,10 +3,15 @@
 Run from the repository root:
 
     python -m training.train_tiny
+
+To continue training from the last checkpoint:
+
+    python -m training.train_tiny --resume
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from src.skeai.dataset import CharacterLanguageDataset
@@ -19,24 +24,44 @@ from src.skeai.trainer import Trainer
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = ROOT / "data" / "samples" / "tiny_corpus.txt"
+CHECKPOINT_PATH = ROOT / "models" / "tiny_character_model.json"
 
 
-def main() -> None:
-    text = CORPUS_PATH.read_text(encoding="utf-8")
+def load_model(resume: bool, text: str) -> TinyCharacterLanguageModel:
+    if resume:
+        if not CHECKPOINT_PATH.exists():
+            raise FileNotFoundError(
+                f"No checkpoint found at {CHECKPOINT_PATH}. "
+                "Run without --resume first."
+            )
+        return TinyCharacterLanguageModel.load_checkpoint(CHECKPOINT_PATH)
 
     tokenizer = CharacterTokenizer()
     tokenizer.fit([text])
 
-    dataset = CharacterLanguageDataset(
-        text=text,
-        tokenizer=tokenizer,
-        context_length=8,
-    )
-
-    model = TinyCharacterLanguageModel(
+    return TinyCharacterLanguageModel(
         tokenizer=tokenizer,
         context_length=8,
         hidden_size=32,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train SkeAI tiny language model.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Load the previous checkpoint before continuing training.",
+    )
+    args = parser.parse_args()
+
+    text = CORPUS_PATH.read_text(encoding="utf-8")
+    model = load_model(args.resume, text)
+
+    dataset = CharacterLanguageDataset(
+        text=text,
+        tokenizer=model.tokenizer,
+        context_length=model.context_length,
     )
 
     trainer = Trainer(
@@ -57,7 +82,11 @@ def main() -> None:
         callback=report,
     )
 
-    print(f"vocabulary_size={tokenizer.vocab_size}")
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    model.save_checkpoint(CHECKPOINT_PATH)
+
+    print(f"checkpoint={CHECKPOINT_PATH}")
+    print(f"vocabulary_size={model.tokenizer.vocab_size}")
     print(f"training_examples={len(dataset)}")
     print(f"initial_loss={history[0]:.6f}")
     print(f"final_loss={history[-1]:.6f}")
