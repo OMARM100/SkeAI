@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .layers import Dense, ReLU, Tanh
 from .tensor import Tensor
@@ -50,6 +50,29 @@ class Sequential:
                     gradients[f"layer{index}.{name}"] = gradient
 
         return gradients
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return JSON-serializable trainable parameters."""
+        return {
+            name: parameter.to_list()
+            for name, parameter in self.parameters().items()
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Load trainable parameters after validating their shapes."""
+        parameters = self.parameters()
+
+        if set(state) != set(parameters):
+            raise ValueError("Checkpoint parameters do not match the model.")
+
+        for name, parameter in parameters.items():
+            loaded = Tensor(state[name])
+            if loaded.shape != parameter.shape:
+                raise ValueError(
+                    f"Shape mismatch for parameter '{name}': "
+                    f"expected {parameter.shape}, got {loaded.shape}."
+                )
+            parameter._data = loaded.to_list()  # type: ignore[attr-defined]
 
 
 __all__ = ["Sequential"]
