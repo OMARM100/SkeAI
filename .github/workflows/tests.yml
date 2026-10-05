@@ -1,5 +1,9 @@
 name: SkeAI Tests
 
+concurrency:
+  group: cpp-training-core-validation
+  cancel-in-progress: true
+
 on:
   push:
     branches: ["main", "feat/cpp-training-core"]
