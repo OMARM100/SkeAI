@@ -145,6 +145,8 @@ Current Level 2 milestone:
 - Full Transformer backward propagation
 - Finite-difference gradient validation
 - Checkpoint save/load and resume training
+- Autoregressive greedy/sampling generation
+- Standalone Level 2 web inference UI
 - Validation loss, throughput telemetry, and early stopping
 - End-to-end benchmark: `python -m benchmarks.benchmark_level2 --steps 5`
 
@@ -158,6 +160,10 @@ Recommended Level 2 workflow:
 Resume the best Level 2 checkpoint with:
 
     python -m training.train_level2 --resume
+
+Run the Level 2 local browser UI:
+
+    python -m ui.server_level2
 
 Level 2 is an engineering-complete small Transformer path. Large-scale data,
 batching, KV-cache inference, mixed precision, and retrieval/web knowledge are
