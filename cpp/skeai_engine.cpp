@@ -3754,6 +3754,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                 weights_batch != nullptr ? 12 : 11
             );
             if (step_args == nullptr) {
+                Py_DECREF(current_sequence_length);
                 Py_DECREF(input_fast);
                 Py_DECREF(target_fast);
                 throw std::bad_alloc();
