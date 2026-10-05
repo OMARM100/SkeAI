@@ -1388,14 +1388,34 @@ PyObject* cpp_sgd_step(PyObject*, PyObject* args) {
     PyObject* parameter_object = nullptr;
     PyObject* gradient_object = nullptr;
     double learning_rate;
+    double weight_decay = 0.0;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOd:sgd_step",
+        "OOd|d:sgd_step",
         &parameter_object,
         &gradient_object,
-        &learning_rate
+        &learning_rate,
+        &weight_decay
     )) {
+        return nullptr;
+    }
+
+    if (!std::isfinite(learning_rate) ||
+        learning_rate <= 0.0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "learning rate must be finite and greater than zero"
+        );
+        return nullptr;
+    }
+
+    if (!std::isfinite(weight_decay) ||
+        weight_decay < 0.0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "weight decay must be finite and non-negative"
+        );
         return nullptr;
     }
 
@@ -1426,7 +1446,8 @@ PyObject* cpp_sgd_step(PyObject*, PyObject* args) {
          ++index) {
         parameter->values[index] -=
             learning_rate *
-            gradient->values[index];
+            (gradient->values[index] +
+             weight_decay * parameter->values[index]);
     }
     Py_END_ALLOW_THREADS
 
