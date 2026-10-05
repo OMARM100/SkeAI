@@ -168,7 +168,7 @@ def build_response_focused_samples(
         dialogue_lines = [TRAINING_SELF_CONTEXT]
 
         for user, response in conversation:
-            prompt_text = "\\n".join(
+            prompt_text = "\n".join(
                 [
                     *dialogue_lines,
                     f"{USER_LABEL} {user}",
@@ -300,6 +300,8 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
+    if args.epochs <= 0:
+        raise ValueError("epochs must be positive.")
     if args.dialogue_repeat <= 0:
         raise ValueError("dialogue-repeat must be positive.")
     if args.response_focus_repeat <= 0:
