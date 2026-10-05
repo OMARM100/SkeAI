@@ -104,6 +104,7 @@ The Level 2 test coverage includes:
 - native softmax backward correctness
 - end-to-end attention learning
 - checkpoint round trips
+- deterministic and sampled generation
 
 ## Current scope
 
