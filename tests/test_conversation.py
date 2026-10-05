@@ -18,6 +18,7 @@ class ConversationMemoryTests(unittest.TestCase):
             loaded = ConversationMemory.load(path)
 
         self.assertEqual(loaded.facts["user_name"], "عمر")
+        self.assertEqual(loaded.state.user_facts["user_name"], "عمر")
         self.assertEqual(loaded.turns[-1]["assistant"], "تشرفت بك يا عمر.")
 
     def test_chat_keeps_context_and_persists(self) -> None:
@@ -61,7 +62,23 @@ class ConversationMemoryTests(unittest.TestCase):
         self.assertIn("SkeAI: رد تجريبي", prompts[-1])
         self.assertEqual(saved.facts["user_name"], "عمر")
         self.assertEqual(len(saved.turns), 2)
+        self.assertEqual(saved.state.self_model["name"], "SkeAI")
+        self.assertEqual(saved.state.user_facts["user_name"], "عمر")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_user_name_can_be_marked_as_system_username(self) -> None:
+        memory = ConversationMemory()
+        memory.remember_from_user("اسمي عمر")
+        memory.remember_from_user("عمر مجرد اسم مستخدم")
+        self.assertEqual(memory.user_facts["user_name"], "عمر")
+        self.assertEqual(memory.user_facts["username_is_real_name"], "false")
+
+    def test_developmental_experience_is_recorded(self) -> None:
+        memory = ConversationMemory()
+        memory.add_turn("مرحبا", "أهلًا بك.")
+        self.assertTrue(memory.state.experiences)
+        self.assertEqual(memory.state.self_model["entity_type"], "ذكاء اصطناعي")
