@@ -45,6 +45,25 @@ class TrainerTests(unittest.TestCase):
         self.assertGreater(predictions[0][0], predictions[0][1])
         self.assertGreater(predictions[1][1], predictions[1][0])
 
+    def test_training_accepts_indexed_batches(self) -> None:
+        from src.skeai.dataset import IndexedBatch
+
+        model = Sequential(
+            [
+                Dense(2, 4, seed=7),
+                Tanh(),
+                Dense(4, 2, seed=8),
+            ]
+        )
+        trainer = Trainer(model=model, optimizer=SGD(learning_rate=0.25))
+        batch = IndexedBatch(indices=[0, 1], targets=[0, 1], batch_size=2)
+
+        first_loss = trainer.train_step(batch)
+        for _ in range(100):
+            trainer.train_step(batch)
+        final_loss = trainer.train_step(batch)
+
+        self.assertLess(final_loss, first_loss)
     def test_evaluation_does_not_update_parameters(self) -> None:
         inputs = Tensor(
             [
