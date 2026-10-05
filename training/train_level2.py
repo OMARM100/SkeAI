@@ -406,6 +406,11 @@ def main() -> None:
         tokenizer,
         context_length,
     )
+    response_focused_validation_samples = build_response_focused_samples(
+        validation_dialogues,
+        tokenizer,
+        context_length,
+    )
 
     if (
         not language_samples
@@ -450,6 +455,10 @@ def main() -> None:
     print(f"dialogue_samples={len(dialogue_samples)}")
     print(f"response_focused_samples={len(response_focused_samples)}")
     print(f"dialogue_validation_samples={len(dialogue_validation_samples)}")
+    print(
+        f"response_focused_validation_samples="
+        f"{len(response_focused_validation_samples)}"
+    )
     print(f"dialogue_repeat={args.dialogue_repeat}")
     print(f"response_focus_repeat={args.response_focus_repeat}")
     print(f"language_training_steps={language_training_steps}")
@@ -510,17 +519,32 @@ def main() -> None:
             dialogue_validation_total += trainer.evaluate(inputs, targets)
             dialogue_validation_count += 1
 
+        response_focused_validation_total = 0.0
+        response_focused_validation_count = 0
+        for inputs, targets in response_focused_validation_samples:
+            response_focused_validation_total += trainer.evaluate(inputs, targets)
+            response_focused_validation_count += 1
+
         language_validation_loss = (
             language_validation_total / max(language_validation_count, 1)
         )
         dialogue_validation_loss = (
             dialogue_validation_total / max(dialogue_validation_count, 1)
         )
-        # Equal weighting keeps generic language quality from hiding a
-        # regression in actual conversation behavior.
-        validation_loss = (
-            language_validation_loss + dialogue_validation_loss
-        ) / 2.0
+        response_focused_validation_loss = (
+            response_focused_validation_total
+            / max(response_focused_validation_count, 1)
+        )
+        # Keep generic language quality from hiding a regression in actual
+        # assistant-response prediction. If no response-focused window exists
+        # in a tiny validation split, fall back to the two established metrics.
+        validation_components = [
+            language_validation_loss,
+            dialogue_validation_loss,
+        ]
+        if response_focused_validation_count:
+            validation_components.append(response_focused_validation_loss)
+        validation_loss = sum(validation_components) / len(validation_components)
         epoch_seconds = time.perf_counter() - epoch_start
         steps_per_second = steps_this_epoch / max(epoch_seconds, 1e-9)
 
@@ -542,6 +566,8 @@ def main() -> None:
             f"validation_loss={validation_loss:.6f} "
             f"language_validation_loss={language_validation_loss:.6f} "
             f"dialogue_validation_loss={dialogue_validation_loss:.6f} "
+            f"response_focused_validation_loss="
+            f"{response_focused_validation_loss:.6f} "
             f"steps={steps_this_epoch} "
             f"epoch_seconds={epoch_seconds:.3f} "
             f"steps_per_second={steps_per_second:.3f} "
@@ -569,6 +595,10 @@ def main() -> None:
         "dialogue_validation_samples": len(dialogue_validation_samples),
         "language_validation_loss": language_validation_loss,
         "dialogue_validation_loss": dialogue_validation_loss,
+        "response_focused_validation_loss": response_focused_validation_loss,
+        "response_focused_validation_samples": len(
+            response_focused_validation_samples
+        ),
         "dialogue_repeat": args.dialogue_repeat,
         "response_focus_repeat": args.response_focus_repeat,
         "language_training_steps": language_training_steps,
