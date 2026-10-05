@@ -185,17 +185,6 @@ class Level2TransformerTests(unittest.TestCase):
             max_vocab_size=16,
             seed=13,
         )
-        model_a = TinyTransformerLM(vocab_size=8, config=config)
-        model_b = TinyTransformerLM(vocab_size=8, config=config)
-        trainer_a = Level2Trainer(
-            model=model_a,
-            optimizer=SGD(learning_rate=0.01),
-        )
-        trainer_b = Level2Trainer(
-            model=model_b,
-            optimizer=SGD(learning_rate=0.01),
-        )
-
         inputs = [
             [1, 2, 1, 2, 1, 2],
             [2, 3, 2, 3, 2, 3],
@@ -205,21 +194,82 @@ class Level2TransformerTests(unittest.TestCase):
             [3, 2, 3, 2, 3, 2],
         ]
 
+        model_reference = TinyTransformerLM(vocab_size=8, config=config)
+        model_single_batch = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_reference = Level2Trainer(
+            model=model_reference,
+            optimizer=SGD(learning_rate=0.01),
+        )
+        trainer_single_batch = Level2Trainer(
+            model=model_single_batch,
+            optimizer=SGD(learning_rate=0.01),
+        )
+
+        reference_first = trainer_reference.train_step(
+            inputs[0],
+            targets[0],
+        )
+        batch_first = trainer_single_batch.train_batch(
+            [inputs[0]],
+            [targets[0]],
+        )
+        self.assertAlmostEqual(batch_first, reference_first, places=10)
+
+        for parameter_reference, parameter_batch in zip(
+            model_reference.parameters().values(),
+            model_single_batch.parameters().values(),
+        ):
+            self.assertEqual(
+                parameter_reference.to_list(),
+                parameter_batch.to_list(),
+            )
+
+        reference_second = trainer_reference.train_step(
+            inputs[1],
+            targets[1],
+        )
+        batch_second = trainer_single_batch.train_batch(
+            [inputs[1]],
+            [targets[1]],
+        )
+        self.assertAlmostEqual(batch_second, reference_second, places=10)
+
+        for parameter_reference, parameter_batch in zip(
+            model_reference.parameters().values(),
+            model_single_batch.parameters().values(),
+        ):
+            self.assertEqual(
+                parameter_reference.to_list(),
+                parameter_batch.to_list(),
+            )
+
+        model_sequential = TinyTransformerLM(vocab_size=8, config=config)
+        model_batch = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_sequential = Level2Trainer(
+            model=model_sequential,
+            optimizer=SGD(learning_rate=0.01),
+        )
+        trainer_batch = Level2Trainer(
+            model=model_batch,
+            optimizer=SGD(learning_rate=0.01),
+        )
+
         sequential_loss = (
-            trainer_a.train_step(inputs[0], targets[0])
-            + trainer_a.train_step(inputs[1], targets[1])
+            trainer_sequential.train_step(inputs[0], targets[0])
+            + trainer_sequential.train_step(inputs[1], targets[1])
         ) / 2.0
-        batch_loss = trainer_b.train_batch(inputs, targets)
+        batch_loss = trainer_batch.train_batch(inputs, targets)
 
         self.assertAlmostEqual(batch_loss, sequential_loss, places=10)
 
-        for parameter_a, parameter_b in zip(
-            model_a.parameters().values(),
-            model_b.parameters().values(),
+        for parameter_sequential, parameter_batch in zip(
+            model_sequential.parameters().values(),
+            model_batch.parameters().values(),
         ):
-            values_a = parameter_a.to_list()
-            values_b = parameter_b.to_list()
-            self.assertEqual(values_a, values_b)
+            self.assertEqual(
+                parameter_sequential.to_list(),
+                parameter_batch.to_list(),
+            )
 
     def test_attention_training_reduces_loss(self) -> None:
         config = TransformerConfig(
