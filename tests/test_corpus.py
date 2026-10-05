@@ -30,6 +30,15 @@ class CorpusTests(unittest.TestCase):
         self.assertGreaterEqual(len(text), 3900)
         self.assertLessEqual(len(text), 4050)
 
+    def test_training_corpus_has_unique_natural_language_lines(self) -> None:
+        lines = [
+            line.strip()
+            for line in TRAINING_PATH.read_text(encoding="utf-8").splitlines()
+            if len(line.strip()) >= 20
+        ]
+        self.assertGreaterEqual(len(lines), 25)
+        self.assertEqual(len(lines), len(set(lines)))
+
     def test_validation_lines_do_not_repeat_training_lines(self) -> None:
         training_lines = {line.strip() for line in TRAINING_PATH.read_text(encoding="utf-8").splitlines() if line.strip()}
         validation_lines = {line.strip() for line in VALIDATION_PATH.read_text(encoding="utf-8").splitlines() if line.strip()}
