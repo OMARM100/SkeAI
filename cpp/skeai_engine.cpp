@@ -1992,6 +1992,27 @@ PyObject* cpp_sgd_step(PyObject*, PyObject* args) {
 
 
 
+struct TrainMatrixView {
+    std::size_t rows = 0;
+    std::size_t cols = 0;
+    const double* values = nullptr;
+
+    TrainMatrixView() = default;
+
+    TrainMatrixView(
+        const double* values_,
+        std::size_t rows_,
+        std::size_t cols_
+    )
+        : rows(rows_),
+          cols(cols_),
+          values(values_) {}
+
+    const double* row_ptr(std::size_t row) const {
+        return values + row * cols;
+    }
+};
+
 struct TrainMatrix {
     std::size_t rows = 0;
     std::size_t cols = 0;
@@ -2041,9 +2062,10 @@ struct TrainLayerCache {
     TrainMatrix hidden;
 };
 
+template <typename LeftMatrix, typename RightMatrix>
 TrainMatrix train_matmul(
-    const TrainMatrix& left,
-    const TrainMatrix& right
+    const LeftMatrix& left,
+    const RightMatrix& right
 ) {
     if (left.cols != right.rows) {
         throw std::runtime_error("incompatible training matmul");
@@ -2071,7 +2093,8 @@ TrainMatrix train_matmul(
     return output;
 }
 
-TrainMatrix train_transpose(const TrainMatrix& input) {
+template <typename MatrixLike>
+TrainMatrix train_transpose(const MatrixLike& input) {
     TrainMatrix output(input.cols, input.rows);
 
     for (std::size_t row = 0; row < input.rows; ++row) {
@@ -2745,36 +2768,23 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             const StorageObject* w1_storage = parameters[base + 4];
             const StorageObject* w2_storage = parameters[base + 5];
 
-            TrainMatrix wq(d, d);
-            TrainMatrix wk(d, d);
-            TrainMatrix wv(d, d);
-            TrainMatrix wo(d, d);
-            TrainMatrix w1(d, ff);
-            TrainMatrix w2(ff, d);
-
-            wq.values.assign(
-                wq_storage->values.begin(),
-                wq_storage->values.end()
+            const TrainMatrixView wq(
+                wq_storage->values.data(), d, d
             );
-            wk.values.assign(
-                wk_storage->values.begin(),
-                wk_storage->values.end()
+            const TrainMatrixView wk(
+                wk_storage->values.data(), d, d
             );
-            wv.values.assign(
-                wv_storage->values.begin(),
-                wv_storage->values.end()
+            const TrainMatrixView wv(
+                wv_storage->values.data(), d, d
             );
-            wo.values.assign(
-                wo_storage->values.begin(),
-                wo_storage->values.end()
+            const TrainMatrixView wo(
+                wo_storage->values.data(), d, d
             );
-            w1.values.assign(
-                w1_storage->values.begin(),
-                w1_storage->values.end()
+            const TrainMatrixView w1(
+                w1_storage->values.data(), d, ff
             );
-            w2.values.assign(
-                w2_storage->values.begin(),
-                w2_storage->values.end()
+            const TrainMatrixView w2(
+                w2_storage->values.data(), ff, d
             );
 
             TrainLayerCache& cache = caches[layer];
@@ -2961,10 +2971,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             ).count();
         }
 
-        TrainMatrix lm_head(d, vocab);
-        lm_head.values.assign(
-            parameters[2]->values.begin(),
-            parameters[2]->values.end()
+        const TrainMatrixView lm_head(
+            parameters[2]->values.data(), d, vocab
         );
 
         auto lm_head_start =
