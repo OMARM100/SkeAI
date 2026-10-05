@@ -29,8 +29,7 @@ def main() -> None:
 
     text = (
         CORPUS.read_text(encoding="utf-8")
-        + "
-"
+        + "\n"
         + DIALOGUE.read_text(encoding="utf-8")
     )
 
@@ -80,7 +79,8 @@ def main() -> None:
     for _ in range(args.steps):
         trainer.train_batch(batch_inputs, batch_targets)
     batch_total_ms = (perf_counter() - batch_start) * 1000.0
-    batch_per_step_ms = batch_total_ms / args.steps / args.batch_size
+    batch_per_step_ms = batch_total_ms / args.steps
+    batch_per_example_ms = batch_per_step_ms / args.batch_size
     batch_examples_per_second = (
         args.steps * args.batch_size
         / max(batch_total_ms / 1000.0, 1e-12)
@@ -94,7 +94,8 @@ def main() -> None:
     print(f"train_step_ms={train_step_ms:.3f}")
     print(f"batch_size={args.batch_size}")
     print(f"train_batch_total_ms={batch_total_ms:.3f}")
-    print(f"train_batch_ms_per_example={batch_per_step_ms:.3f}")
+    print(f"train_batch_ms_per_step={batch_per_step_ms:.3f}")
+    print(f"train_batch_ms_per_example={batch_per_example_ms:.3f}")
     print(f"train_batch_examples_per_second={batch_examples_per_second:.2f}")
     print("training_backend=cpp_batch_fused")
     print("attention_backend=cpp")
