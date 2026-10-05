@@ -27,8 +27,11 @@ async function loadStatus() {
     const response = await fetch("/api/status");
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || "status error");
+    const modelLabel = data.model_type === "level2_transformer"
+      ? "Transformer"
+      : "نموذج حرفي";
     status.textContent =
-      "نموذج حرفي · مفردات " + data.vocabulary_size +
+      modelLabel + " · مفردات " + data.vocabulary_size +
       " · سياق " + data.context_length +
       " · معاملات " + data.parameter_count;
   } catch (error) {
@@ -55,6 +58,7 @@ form.addEventListener("submit", async (event) => {
         message,
         max_new_tokens: 64,
         temperature: 0.85,
+        top_k: 0,
       }),
     });
     const data = await response.json();
