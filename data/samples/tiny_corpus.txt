@@ -9,7 +9,6 @@ SkeAI training text.
 أريد أن يتعلم SkeAI كيف يتوقع الحرف التالي من السياق القريب.
 في الغرفة حاسوب ودفتر وقلم، وعلى الشاشة تظهر رسالة صغيرة للمستخدم.
 إذا ظهرت مشكلة في الكود نقرأ الخطأ بهدوء ثم نبحث عن السبب خطوة خطوة.
-البيانات المتنوعة تجعل الاختبار أقوى وتقلل الاعتماد على المثال الواحد.
 يكتب الطفل كلمة جديدة ثم يستخدمها في جملة حتى يثبت شكلها في ذاكرته.
 تختلف كلمة السؤال عن كلمة الجواب، ولهذا يجب أن يعتمد الرد على السياق.
 في اللغة العربية قد تأتي الهمزة بأشكال مختلفة مثل أ وإ وآ وؤ وئ.
@@ -31,10 +30,7 @@ SkeAI training text.
 Hello world is a small example that lets the model observe English characters and spaces.
 A simple program reads text, predicts the next character, and continues the sequence.
 The model should learn patterns instead of copying one sentence again and again.
-Good training examples use different topics, different names, and different sentence lengths.
-A validation example should test the same language skills without copying the training line.
 When the context becomes longer, the model can use more previous characters to choose a letter.
-I like clear code because readable structures make small experiments easier to debug.
 The user can enter a new phrase and observe how the tiny model responds to it.
 A word can be unseen as a whole while its characters are already known to the tokenizer.
 It predicts characters, so an unfamiliar word can still be processed one character at a time.
@@ -48,7 +44,6 @@ If a completely new symbol appears, the tokenizer uses an unknown-character toke
 تساعد الأسئلة القصيرة على اختبار الانتقال بين السؤال والجواب بدل حفظ جملة واحدة.
 يمكن أن نقول صباح الخير ثم نغير الصياغة إلى يوم سعيد أو مساء هادئ.
 النموذج المفيد يجب أن يبقى ثابتًا عندما تتغير الكلمات قليلًا مع بقاء الفكرة قريبة.
-جملة قصيرة مثل الجو هادئ، وجملة أطول مثل الجو هادئ لأن المطر توقف منذ قليل.
 نريد كذلك أمثلة عن البرمجة والملفات والذاكرة والشبكة والواجهة والأخطاء.
 الملف يُحفظ بعد التحقق، والبرنامج يقرأه قبل أن يبدأ التحليل.
 الخادم يستقبل الطلب، ثم يرسل نتيجة واضحة إلى التطبيق بعد انتهاء المعالجة.
