@@ -3115,6 +3115,11 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
 
             const double weight = target_weights[row];
             total_loss -= weight * std::log(probability);
+            for (std::size_t column = 0;
+                 column < vocab;
+                 ++column) {
+                dlogits_row[column] *= weight;
+            }
             dlogits_row[target] -= weight;
         }
 
