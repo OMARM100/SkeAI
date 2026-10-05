@@ -67,7 +67,7 @@ Run the full test suite:
 
 Run the Level 2 benchmark:
 
-    python -m benchmarks.benchmark_level2 --steps 5
+    python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16
 
 Run a short smoke training session:
 
