@@ -93,12 +93,23 @@ def load_dialogue_pairs(path: Path) -> list[list[tuple[str, str]]]:
     return conversations
 
 
-def format_dialogue(conversation: list[tuple[str, str]]) -> str:
-    # Multi-turn sequences teach state tracking instead of isolated Q&A.
-    return "\n".join(
+TRAINING_SELF_CONTEXT = (
+    "حالة SkeAI: أنا SkeAI | نوعي: ذكاء اصطناعي | أنا لست إنسانًا | "
+    "مرحلة التطور: بداية التعلم"
+)
+
+def format_dialogue(
+    conversation: list[tuple[str, str]],
+    *,
+    include_self_context: bool = True,
+) -> str:
+    # Keep the neural training prompt aligned with the runtime chat prompt.
+    parts = [TRAINING_SELF_CONTEXT] if include_self_context else []
+    parts.extend(
         f"{USER_LABEL} {user}\n{ASSISTANT_LABEL} {response}"
         for user, response in conversation
     )
+    return "\n".join(parts)
 
 
 def build_dialogue_samples(
@@ -108,7 +119,7 @@ def build_dialogue_samples(
 ) -> list[tuple[list[int], list[int]]]:
     samples: list[tuple[list[int], list[int]]] = []
     for conversation in conversations:
-        text = format_dialogue(conversation)
+        text = format_dialogue(conversation, include_self_context=True)
         tokens = tokenizer.encode(text, add_bos=True, add_eos=True)
         samples.extend(
             make_samples(
@@ -183,7 +194,10 @@ def main() -> None:
     train_text = TRAIN_CORPUS.read_text(encoding="utf-8")
     validation_text = VALIDATION_CORPUS.read_text(encoding="utf-8")
     dialogue_conversations = load_dialogue_pairs(DIALOGUE_JSON)
-    dialogue_texts = [format_dialogue(conversation) for conversation in dialogue_conversations]
+    dialogue_texts = [
+        format_dialogue(conversation, include_self_context=True)
+        for conversation in dialogue_conversations
+    ]
 
     tokenizer = build_tokenizer(
         train_text,
