@@ -11,6 +11,17 @@ from src.skeai.tensor import Tensor
 from src.skeai.level2.transformer import _causal_softmax, _softmax_backward
 
 
+class Level2ConfigTests(unittest.TestCase):
+    def test_default_config_is_medium_scale(self) -> None:
+        config = TransformerConfig()
+        self.assertEqual(config.context_length, 128)
+        self.assertEqual(config.d_model, 128)
+        self.assertEqual(config.n_heads, 4)
+        self.assertEqual(config.feed_forward_size, 512)
+        self.assertEqual(config.n_layers, 4)
+        self.assertEqual(config.max_vocab_size, 2048)
+
+
 class Level2TokenizerTests(unittest.TestCase):
     def test_frequent_units_are_compacted(self) -> None:
         tokenizer = HybridTokenizer()
