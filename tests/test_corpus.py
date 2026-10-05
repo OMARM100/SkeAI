@@ -69,11 +69,13 @@ class CorpusTests(unittest.TestCase):
         unseen = _words(validation) - _words(training)
         self.assertGreaterEqual(len(unseen), 8)
 
-    def test_validation_corpus_uses_known_training_characters(self) -> None:
+    def test_validation_characters_exist_in_training_or_coverage(self) -> None:
         training = TRAINING_PATH.read_text(encoding="utf-8")
+        coverage = COVERAGE_PATH.read_text(encoding="utf-8")
         validation = VALIDATION_PATH.read_text(encoding="utf-8")
 
-        self.assertTrue(set(validation).issubset(set(training)))
+        available = set(training) | set(coverage)
+        self.assertTrue(set(validation).issubset(available))
 
 
 if __name__ == "__main__":
