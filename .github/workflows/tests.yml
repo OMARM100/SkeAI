@@ -2,7 +2,7 @@ name: SkeAI Tests
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "perf/baseline-cpp-training-ci"]
   pull_request:
     branches: ["main"]
 
@@ -24,3 +24,6 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+      - name: Run Level 2 baseline benchmark
+        run: python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16
