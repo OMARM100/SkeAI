@@ -148,7 +148,7 @@ Current Level 2 milestone:
 - Autoregressive greedy/sampling generation
 - Standalone Level 2 web inference UI
 - Validation loss, throughput telemetry, and early stopping
-- End-to-end benchmark: `python -m benchmarks.benchmark_level2 --steps 5`
+- End-to-end benchmark: `python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16`
 
 Recommended Level 2 workflow:
 
