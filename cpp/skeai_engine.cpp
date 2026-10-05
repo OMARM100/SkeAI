@@ -3528,6 +3528,17 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         return nullptr;
     }
 
+    if (!std::isfinite(learning_rate) ||
+        learning_rate <= 0.0 ||
+        !std::isfinite(weight_decay) ||
+        weight_decay < 0.0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "invalid transformer learning rate or weight decay"
+        );
+        return nullptr;
+    }
+
     PyObject* input_batch = PySequence_Fast(
         inputs_object,
         "inputs must be a sequence of token sequences"
@@ -3749,6 +3760,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         Py_XDECREF(feed_forward_object);
         Py_XDECREF(layers_object);
         Py_XDECREF(learning_rate_object);
+        Py_XDECREF(weight_decay_object);
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
         PyErr_SetString(PyExc_RuntimeError, exc.what());
