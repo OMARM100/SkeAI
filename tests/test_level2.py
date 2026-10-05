@@ -175,6 +175,52 @@ class Level2TransformerTests(unittest.TestCase):
         numerical = (plus - minus) / (2.0 * epsilon)
         self.assertAlmostEqual(analytic, numerical, places=3)
 
+    def test_native_batch_training_matches_sequential_updates(self) -> None:
+        config = TransformerConfig(
+            context_length=6,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=16,
+            n_layers=1,
+            max_vocab_size=16,
+            seed=13,
+        )
+        model_a = TinyTransformerLM(vocab_size=8, config=config)
+        model_b = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_a = Level2Trainer(
+            model=model_a,
+            optimizer=SGD(learning_rate=0.01),
+        )
+        trainer_b = Level2Trainer(
+            model=model_b,
+            optimizer=SGD(learning_rate=0.01),
+        )
+
+        inputs = [
+            [1, 2, 1, 2, 1, 2],
+            [2, 3, 2, 3, 2, 3],
+        ]
+        targets = [
+            [2, 1, 2, 1, 2, 1],
+            [3, 2, 3, 2, 3, 2],
+        ]
+
+        sequential_loss = (
+            trainer_a.train_step(inputs[0], targets[0])
+            + trainer_a.train_step(inputs[1], targets[1])
+        ) / 2.0
+        batch_loss = trainer_b.train_batch(inputs, targets)
+
+        self.assertAlmostEqual(batch_loss, sequential_loss, places=10)
+
+        for parameter_a, parameter_b in zip(
+            model_a.parameters().values(),
+            model_b.parameters().values(),
+        ):
+            values_a = parameter_a.to_list()
+            values_b = parameter_b.to_list()
+            self.assertEqual(values_a, values_b)
+
     def test_attention_training_reduces_loss(self) -> None:
         config = TransformerConfig(
             context_length=6,
