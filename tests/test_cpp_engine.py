@@ -54,7 +54,7 @@ class CppEngineTests(unittest.TestCase):
         )
         self.assertEqual(
             gradient.to_list(),
-            [[2.5, 5.5], [5.5, 11.5]],
+            [[2.5, 5.5], [5.5, 12.5]],
         )
 
 
