@@ -35,9 +35,26 @@ class Sequential:
             output = layer.forward(output)
         return output
 
-    def backward(self, gradient: Tensor) -> Tensor:
+    def backward(
+        self,
+        gradient: Tensor,
+        *,
+        compute_input_gradient: bool = True,
+    ) -> Tensor | None:
         output = gradient
-        for layer in reversed(self.layers):
+        for index in range(len(self.layers) - 1, -1, -1):
+            layer = self.layers[index]
+
+            if (
+                index == 0
+                and isinstance(layer, Dense)
+                and not compute_input_gradient
+            ):
+                return layer.backward(
+                    output,
+                    compute_input_gradient=False,
+                )
+
             output = layer.backward(output)
         return output
 
