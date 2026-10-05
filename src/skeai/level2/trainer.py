@@ -58,6 +58,46 @@ class Level2Trainer:
         self.optimizer.step(self.model.parameters(), gradients)
         return loss_value
 
+    def train_batch(
+        self,
+        inputs: Sequence[Sequence[int]],
+        targets: Sequence[Sequence[int]],
+    ) -> float:
+        if len(inputs) != len(targets):
+            raise ValueError("inputs and targets batch sizes must match.")
+        if not inputs:
+            raise ValueError("training batch cannot be empty.")
+        if (
+            engine.NATIVE_AVAILABLE
+            and isinstance(self.optimizer, SGD)
+            and getattr(self.optimizer, "weight_decay", 0.0) == 0.0
+        ):
+            parameters = [
+                self.model.token_embedding,
+                self.model.position_embedding,
+            ]
+            for block in self.model.blocks:
+                parameters.extend(block.values())
+            parameters.append(self.model.lm_head)
+
+            return engine.transformer_train_batch(
+                [parameter._storage for parameter in parameters],
+                inputs,
+                targets,
+                self.model.vocab_size,
+                self.model.config.context_length,
+                self.model.config.d_model,
+                self.model.config.n_heads,
+                self.model.config.feed_forward_size,
+                self.model.config.n_layers,
+                self.optimizer.learning_rate,
+            )
+
+        total_loss = 0.0
+        for batch_input, batch_target in zip(inputs, targets):
+            total_loss += self.train_step(batch_input, batch_target)
+        return total_loss / len(inputs)
+
     def evaluate(
         self,
         inputs: Sequence[int],
