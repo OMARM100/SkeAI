@@ -235,17 +235,27 @@ def transformer_train_step(
     n_layers: int,
     learning_rate: float,
 ) -> float:
+    native_parameters = list(parameters)
+    native_tokens = list(token_ids)
+    native_targets = list(target_ids)
+
+    if len(native_tokens) != len(native_targets):
+        raise ValueError("token_ids and target_ids must have the same length.")
+    if not native_tokens:
+        raise ValueError("token_ids cannot be empty.")
+
     return float(
         _require_cpp().transformer_train_step(
-            list(parameters),
-            list(token_ids),
-            list(target_ids),
+            native_parameters,
+            native_tokens,
+            native_targets,
             int(vocabulary_size),
             int(context_length),
             int(d_model),
             int(n_heads),
             int(feed_forward_size),
             int(n_layers),
+            len(native_tokens),
             float(learning_rate),
         )
     )
