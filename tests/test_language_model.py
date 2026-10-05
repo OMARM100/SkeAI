@@ -31,6 +31,9 @@ class TinyLanguageModelTests(unittest.TestCase):
         generated = self.model.generate(prompt, max_new_tokens=0)
         self.assertEqual(generated, prompt)
 
+    def test_memorized_response_normalizes_prompt(self) -> None:
+        self.model.set_response_memory({"كيف حالك؟": "أنا بخير."})
+        self.assertEqual(self.model.respond("  كيف حالك ؟ "), "أنا بخير.")
     def test_invalid_generation_controls(self) -> None:
         with self.assertRaises(ValueError):
             self.model.generate("hello", top_k=0)
