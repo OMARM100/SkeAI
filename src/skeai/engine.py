@@ -151,8 +151,18 @@ def cross_entropy_forward(
     )
 
 
-def sgd_step(parameter: Any, gradient: Any, learning_rate: float) -> None:
-    _require_cpp().sgd_step(parameter, gradient, float(learning_rate))
+def sgd_step(
+    parameter: Any,
+    gradient: Any,
+    learning_rate: float,
+    weight_decay: float = 0.0,
+) -> None:
+    _require_cpp().sgd_step(
+        parameter,
+        gradient,
+        float(learning_rate),
+        float(weight_decay),
+    )
 
 
 __all__ = [
