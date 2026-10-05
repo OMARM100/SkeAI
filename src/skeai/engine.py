@@ -223,6 +223,34 @@ def sgd_step(
     )
 
 
+def transformer_train_step(
+    parameters: Sequence[Any],
+    token_ids: Sequence[int],
+    target_ids: Sequence[int],
+    vocabulary_size: int,
+    context_length: int,
+    d_model: int,
+    n_heads: int,
+    feed_forward_size: int,
+    n_layers: int,
+    learning_rate: float,
+) -> float:
+    return float(
+        _require_cpp().transformer_train_step(
+            list(parameters),
+            list(token_ids),
+            list(target_ids),
+            int(vocabulary_size),
+            int(context_length),
+            int(d_model),
+            int(n_heads),
+            int(feed_forward_size),
+            int(n_layers),
+            float(learning_rate),
+        )
+    )
+
+
 __all__ = [
     "BACKEND_NAME",
     "NATIVE_AVAILABLE",
@@ -252,6 +280,7 @@ __all__ = [
     "mse_backward",
     "cross_entropy_forward",
     "sgd_step",
+    "transformer_train_step",
     "storage_from_flat",
     "storage_zeros",
     "storage_to_flat",
