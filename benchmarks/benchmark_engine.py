@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import platform
 
+from time import perf_counter
+
 from src.skeai.benchmark import benchmark
 from src.skeai.dataset import CharacterLanguageDataset
 from src.skeai.language_model import TinyCharacterLanguageModel
@@ -109,22 +111,50 @@ def main() -> None:
         enable_timing=True,
     )
 
-    step_result = benchmark(
-        "trainer.train_step",
-        lambda: trainer.train_step(inputs, targets),
-        repeats=3,
-        warmups=1,
-    )
+    warmups = 1
+    repeats = 5
+
+    for _ in range(warmups):
+        trainer.train_step(inputs, targets)
+
+    stage_totals = {
+        "forward_ms": 0.0,
+        "loss_ms": 0.0,
+        "backward_ms": 0.0,
+        "optimizer_ms": 0.0,
+        "total_ms": 0.0,
+    }
+
+    total_start = perf_counter()
+    for _ in range(repeats):
+        trainer.train_step(inputs, targets)
+        for key in stage_totals:
+            stage_totals[key] += trainer.last_step_timing[key]
+    total_elapsed = perf_counter() - total_start
+
+    average_step_seconds = total_elapsed / repeats
 
     print(
         f"train_step=batch16 "
-        f"avg={step_result.average_milliseconds:.3f}ms "
-        f"throughput={16 / step_result.average_seconds:.2f}examples/s"
+        f"avg={average_step_seconds * 1000.0:.3f}ms "
+        f"throughput={16 / average_step_seconds:.2f}examples/s"
     )
-    print(f"train_step_forward={trainer.last_step_timing['forward_ms']:.3f}ms")
-    print(f"train_step_loss={trainer.last_step_timing['loss_ms']:.3f}ms")
-    print(f"train_step_backward={trainer.last_step_timing['backward_ms']:.3f}ms")
-    print(f"train_step_optimizer={trainer.last_step_timing['optimizer_ms']:.3f}ms")
+    print(
+        f"train_step_forward="
+        f"{stage_totals['forward_ms'] / repeats:.3f}ms"
+    )
+    print(
+        f"train_step_loss="
+        f"{stage_totals['loss_ms'] / repeats:.3f}ms"
+    )
+    print(
+        f"train_step_backward="
+        f"{stage_totals['backward_ms'] / repeats:.3f}ms"
+    )
+    print(
+        f"train_step_optimizer="
+        f"{stage_totals['optimizer_ms'] / repeats:.3f}ms"
+    )
     print(f"model_parameters={model.network.parameter_count()}")
 
 
