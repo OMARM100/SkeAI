@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import random
-from typing import Dict
+from typing import Dict, Sequence
 
 from . import engine
 from .tensor import Tensor
@@ -27,6 +27,7 @@ class Dense:
         self.grad_bias = Tensor.zeros((output_size,))
 
         self._cached_input: Tensor | None = None
+        self._cached_indexed_input: list[int] | None = None
         self._cached_output: Tensor | None = None
         self._cached_grad_input: Tensor | None = None
 
@@ -65,14 +66,66 @@ class Dense:
         )
 
         self._cached_input = inputs
+        self._cached_indexed_input = None
         return self._cached_output  # type: ignore[return-value]
 
+    def forward_indexed(self, indices: Sequence[int], batch_size: int) -> Tensor:
+        """Forward pass for compact indexed one-hot input."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
+        if not indices or len(indices) % batch_size != 0:
+            raise ValueError("Indexed inputs must divide evenly across the batch.")
+
+        input_size = self.weights.shape[0]
+        output_size = self.weights.shape[1]
+        normalized = [int(value) for value in indices]
+
+        if any(value < 0 or value >= input_size for value in normalized):
+            raise ValueError("Indexed feature is out of range.")
+
+        self._ensure_output_buffers(batch_size)
+        engine.dense_indexed_forward(
+            normalized,
+            self.weights._storage,
+            self.bias._storage,
+            self._cached_output._storage,  # type: ignore[union-attr]
+            batch_size,
+            input_size,
+            output_size,
+        )
+
+        self._cached_input = None
+        self._cached_indexed_input = normalized
+        return self._cached_output  # type: ignore[return-value]
     def backward(
         self,
         grad_output: Tensor,
         *,
         compute_input_gradient: bool = True,
     ) -> Tensor | None:
+        if self._cached_indexed_input is not None:
+            if compute_input_gradient:
+                raise ValueError(
+                    "Indexed dense inputs do not have a differentiable input gradient."
+                )
+
+            batch_size = grad_output.shape[0]
+            input_size = self.weights.shape[0]
+            output_size = self.weights.shape[1]
+
+            if grad_output.shape[1] != output_size:
+                raise ValueError("Output feature count mismatch in Dense.backward.")
+
+            engine.dense_indexed_backward(
+                self._cached_indexed_input,
+                grad_output._storage,
+                self.grad_weights._storage,
+                self.grad_bias._storage,
+                batch_size,
+                input_size,
+                output_size,
+            )
+            return None
         if self._cached_input is None:
             raise RuntimeError("forward must be called before backward.")
         if grad_output.ndim != 2:
