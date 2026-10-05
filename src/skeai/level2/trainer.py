@@ -36,6 +36,7 @@ class Level2Trainer:
         if (
             engine.NATIVE_AVAILABLE
             and isinstance(self.optimizer, SGD)
+            and getattr(self.optimizer, "weight_decay", 0.0) == 0.0
         ):
             parameters = list(self.model.parameters().values())
             return engine.transformer_train_step(
@@ -49,7 +50,6 @@ class Level2Trainer:
                 self.model.config.feed_forward_size,
                 self.model.config.n_layers,
                 self.optimizer.learning_rate,
-                self.optimizer.weight_decay,
             )
 
         logits = self.model.forward(list(inputs))
@@ -70,6 +70,7 @@ class Level2Trainer:
         if (
             engine.NATIVE_AVAILABLE
             and isinstance(self.optimizer, SGD)
+            and getattr(self.optimizer, "weight_decay", 0.0) == 0.0
         ):
             parameters = list(self.model.parameters().values())
 
@@ -84,7 +85,6 @@ class Level2Trainer:
                 self.model.config.feed_forward_size,
                 self.model.config.n_layers,
                 self.optimizer.learning_rate,
-                self.optimizer.weight_decay,
             )
 
         total_loss = 0.0
