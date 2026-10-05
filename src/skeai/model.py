@@ -1,4 +1,4 @@
-"""Small sequential neural network for SkeAI 0.1."""
+"""Small sequential neural network for SkeAI 0.2."""
 
 from __future__ import annotations
 
@@ -50,6 +50,10 @@ class Sequential:
                     gradients[f"layer{index}.{name}"] = gradient
 
         return gradients
+
+    def parameter_count(self) -> int:
+        """Return the total number of scalar trainable parameters."""
+        return sum(parameter.size for parameter in self.parameters().values())
 
     def state_dict(self) -> Dict[str, Any]:
         """Return JSON-serializable trainable parameters."""
