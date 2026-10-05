@@ -19,6 +19,23 @@ class OptimizerTests(unittest.TestCase):
         self.assertAlmostEqual(layer.parameters()["weights"].to_list()[0][0], 0.9)
         self.assertAlmostEqual(layer.parameters()["bias"].to_list()[0], 0.45)
 
+    def test_rejects_negative_weight_decay(self) -> None:
+        with self.assertRaises(ValueError):
+            SGD(weight_decay=-0.1)
+
+    def test_weight_decay_reduces_parameter_update(self) -> None:
+        layer = Dense(1, 1, seed=1)
+        layer.weights = Tensor([[1.0]])
+        layer.bias = Tensor([0.5])
+        layer.grad_weights = Tensor([[0.0]])
+        layer.grad_bias = Tensor([0.0])
+
+        optimizer = SGD(learning_rate=0.5, weight_decay=0.1)
+        optimizer.step(layer.parameters(), layer.gradients())
+
+        self.assertAlmostEqual(layer.parameters()["weights"].to_list()[0][0], 0.95)
+        self.assertAlmostEqual(layer.parameters()["bias"].to_list()[0], 0.475)
+
     def test_rejects_invalid_learning_rate(self) -> None:
         with self.assertRaises(ValueError):
             SGD(learning_rate=0.0)
