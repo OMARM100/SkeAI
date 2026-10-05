@@ -6,6 +6,7 @@ import random
 from time import perf_counter
 from typing import Callable, Dict, List, Sequence
 
+from .dataset import IndexedBatch
 from .loss import CrossEntropyLoss
 from .model import Sequential
 from .optimizer import SGD
@@ -50,12 +51,21 @@ class Trainer:
             )
         }
 
-    def train_step(self, inputs: Tensor, targets: Sequence[int]) -> float:
+    def _forward_batch(self, inputs: Tensor | IndexedBatch) -> Tensor:
+        if isinstance(inputs, IndexedBatch):
+            return self.model.forward_indexed(inputs.indices, inputs.batch_size)
+        return self.model.forward(inputs)
+    def train_step(self, inputs: Tensor | IndexedBatch, targets: Sequence[int] | None = None) -> float:
         total_start = perf_counter()
         if self.enable_timing:
             stage_start = perf_counter()
 
-        logits = self.model.forward(inputs)
+        if isinstance(inputs, IndexedBatch):
+            targets = inputs.targets
+        if targets is None:
+            raise ValueError("targets are required for a dense Tensor batch.")
+
+        logits = self._forward_batch(inputs)
 
         if self.enable_timing:
             forward_ms = (perf_counter() - stage_start) * 1000.0
@@ -105,7 +115,7 @@ class Trainer:
         total_examples = 0
 
         for inputs, targets in batches:
-            logits = self.model.forward(inputs)
+            logits = self._forward_batch(inputs)
             batch_loss = self.loss.forward(logits, targets)
             batch_examples = inputs.shape[0]
             total_loss += batch_loss * batch_examples
