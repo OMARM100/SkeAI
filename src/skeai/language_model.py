@@ -1,8 +1,9 @@
-"""A tiny character-level language model for SkeAI 0.1."""
+"""A tiny character-level language model for SkeAI."""
 
 from __future__ import annotations
 
 import json
+import math
 import random
 from pathlib import Path
 from typing import Any, List
@@ -64,8 +65,59 @@ class TinyCharacterLanguageModel:
         return self.network.forward(self.encode_context(token_ids))
 
     @staticmethod
-    def _argmax(values: List[float]) -> int:
-        return max(range(len(values)), key=values.__getitem__)
+    def _argmax(values: List[float], candidates: List[int] | None = None) -> int:
+        if candidates is None:
+            return max(range(len(values)), key=values.__getitem__)
+        return max(candidates, key=values.__getitem__)
+
+    @staticmethod
+    def _would_repeat_ngram(
+        token_ids: List[int],
+        candidate_id: int,
+        ngram_size: int,
+    ) -> bool:
+        if ngram_size <= 1:
+            return False
+
+        proposed = token_ids + [candidate_id]
+        if len(proposed) < ngram_size:
+            return False
+
+        target = tuple(proposed[-ngram_size:])
+        for start in range(len(proposed) - ngram_size):
+            if tuple(proposed[start:start + ngram_size]) == target:
+                return True
+
+        return False
+
+    def _adjust_logits(
+        self,
+        logits: List[float],
+        token_ids: List[int],
+        repetition_penalty: float,
+    ) -> List[float]:
+        adjusted = list(logits)
+
+        if repetition_penalty == 1.0:
+            return adjusted
+
+        recent_tokens = set(token_ids[-self.context_length:])
+        special_ids = {
+            self.tokenizer.pad_id,
+            self.tokenizer.bos_id,
+            self.tokenizer.eos_id,
+            self.tokenizer.unk_id,
+        }
+
+        for token_id in recent_tokens:
+            if token_id in special_ids:
+                continue
+            if adjusted[token_id] >= 0.0:
+                adjusted[token_id] /= repetition_penalty
+            else:
+                adjusted[token_id] *= repetition_penalty
+
+        return adjusted
 
     def generate(
         self,
@@ -73,42 +125,87 @@ class TinyCharacterLanguageModel:
         max_new_tokens: int = 32,
         temperature: float = 1.0,
         seed: int | None = None,
+        top_k: int | None = 8,
+        repetition_penalty: float = 1.1,
+        no_repeat_ngram_size: int = 3,
     ) -> str:
+        if not isinstance(prompt, str):
+            raise TypeError("prompt must be a string.")
         if max_new_tokens < 0:
             raise ValueError("max_new_tokens cannot be negative.")
         if temperature <= 0.0:
             raise ValueError("temperature must be greater than zero.")
+        if top_k is not None and top_k <= 0:
+            raise ValueError("top_k must be greater than zero or None.")
+        if repetition_penalty < 1.0:
+            raise ValueError("repetition_penalty must be at least one.")
+        if no_repeat_ngram_size < 0:
+            raise ValueError("no_repeat_ngram_size cannot be negative.")
 
         token_ids = self.tokenizer.encode(prompt)
         rng = random.Random(seed)
+        generated_ids: List[int] = []
 
         for _ in range(max_new_tokens):
             logits = self.forward(token_ids).to_list()[0]
+            adjusted = self._adjust_logits(
+                logits,
+                token_ids,
+                repetition_penalty,
+            )
+
+            blocked = {
+                token_id
+                for token_id in range(self.tokenizer.vocab_size)
+                if self._would_repeat_ngram(
+                    token_ids,
+                    token_id,
+                    no_repeat_ngram_size,
+                )
+            }
+
+            allowed = [
+                token_id
+                for token_id in range(self.tokenizer.vocab_size)
+                if token_id not in blocked
+            ]
+            if not allowed:
+                allowed = list(range(self.tokenizer.vocab_size))
 
             if temperature == 1.0:
-                next_id = self._argmax(logits)
+                next_id = self._argmax(adjusted, allowed)
             else:
-                scaled = [value / temperature for value in logits]
+                if top_k is None:
+                    candidates = allowed
+                else:
+                    candidates = sorted(
+                        allowed,
+                        key=adjusted.__getitem__,
+                        reverse=True,
+                    )[: min(top_k, len(allowed))]
+
+                scaled = [adjusted[token_id] / temperature for token_id in candidates]
                 maximum = max(scaled)
                 probabilities = [
-                    pow(2.718281828, value - maximum)
+                    math.exp(value - maximum)
                     for value in scaled
                 ]
                 total = sum(probabilities)
                 probabilities = [value / total for value in probabilities]
 
                 next_id = rng.choices(
-                    range(len(probabilities)),
+                    candidates,
                     weights=probabilities,
                     k=1,
                 )[0]
 
             token_ids.append(next_id)
+            generated_ids.append(next_id)
 
             if next_id == self.tokenizer.eos_id:
                 break
 
-        return self.tokenizer.decode(token_ids)
+        return prompt + self.tokenizer.decode(generated_ids)
 
     def save_checkpoint(self, path: str | Path) -> None:
         """Save tokenizer and model state as a portable JSON checkpoint."""
