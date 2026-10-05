@@ -1,4 +1,4 @@
-"""Tests for the bundled tiny language-model corpora."""
+"""Tests for the bundled SkeAI language-model corpora."""
 
 from __future__ import annotations
 
@@ -36,8 +36,10 @@ class CorpusTests(unittest.TestCase):
     def test_training_corpus_has_reasonable_size(self) -> None:
         text = TRAINING_PATH.read_text(encoding="utf-8")
 
-        self.assertGreaterEqual(len(text), 7500)
-        self.assertLessEqual(len(text), 9000)
+        # Corpus v2 is intentionally much larger than the original tiny corpus.
+        # Keep a generous upper bound for later corpus expansion.
+        self.assertGreaterEqual(len(text), 50000)
+        self.assertLessEqual(len(text), 500000)
 
     def test_validation_corpus_has_reasonable_size(self) -> None:
         text = VALIDATION_PATH.read_text(encoding="utf-8")
