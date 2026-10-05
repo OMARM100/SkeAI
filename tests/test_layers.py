@@ -12,6 +12,15 @@ class LayerTests(unittest.TestCase):
 
         self.assertEqual(output.shape, (2, 2))
 
+    def test_dense_reused_forward_resets_output(self) -> None:
+        layer = Dense(2, 2, seed=1)
+        inputs = Tensor([[1.0, 0.0], [0.0, 1.0]])
+
+        first = layer.forward(inputs).to_list()
+        second = layer.forward(inputs).to_list()
+
+        self.assertEqual(second, first)
+
     def test_dense_backward_shapes(self) -> None:
         layer = Dense(3, 2, seed=1)
         inputs = Tensor([[1, 2, 3], [4, 5, 6]])
