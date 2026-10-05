@@ -58,7 +58,12 @@ def main() -> None:
 
     dataset = CharacterLanguageDataset(text=text, tokenizer=model.tokenizer, context_length=model.context_length)
     validation_dataset = CharacterLanguageDataset(text=validation_text, tokenizer=model.tokenizer, context_length=model.context_length)
-    trainer = Trainer(model=model.network, optimizer=SGD(learning_rate=0.05), loss=CrossEntropyLoss(), enable_timing=True)
+    trainer = Trainer(
+        model=model.network,
+        optimizer=SGD(learning_rate=0.05, weight_decay=0.001),
+        loss=CrossEntropyLoss(),
+        enable_timing=True,
+    )
 
     batches = dataset.all_batches(batch_size=BATCH_SIZE)
     validation_batches = validation_dataset.all_batches(batch_size=BATCH_SIZE)
@@ -102,7 +107,11 @@ def main() -> None:
     training_seconds = perf_counter() - training_start
 
     best_model = TinyCharacterLanguageModel.load_checkpoint(CHECKPOINT_PATH)
-    best_evaluator = Trainer(model=best_model.network, optimizer=SGD(learning_rate=0.05), loss=CrossEntropyLoss())
+    best_evaluator = Trainer(
+        model=best_model.network,
+        optimizer=SGD(learning_rate=0.05),
+        loss=CrossEntropyLoss(),
+    )
     final_validation_loss = best_evaluator.evaluate_batches(validation_batches)
     total_seconds = perf_counter() - total_start
 
