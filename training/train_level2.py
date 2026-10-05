@@ -187,18 +187,20 @@ def main() -> None:
         order = list(range(len(train_samples)))
         rng.shuffle(order)
 
-        train_loss_total = 0.0
-        steps_this_epoch = 0
+        epoch_batch = [
+            train_samples[index]
+            for index in order[:args.max_train_steps]
+        ]
+        if not epoch_batch:
+            raise RuntimeError("No training samples selected for epoch.")
+
+        steps_this_epoch = len(epoch_batch)
         epoch_start = time.perf_counter()
-
-        for index in order:
-            inputs, targets = train_samples[index]
-            train_loss_total += trainer.train_step(inputs, targets)
-            steps_this_epoch += 1
-            completed_steps += 1
-
-            if steps_this_epoch >= args.max_train_steps:
-                break
+        train_loss = trainer.train_batch(
+            [sample[0] for sample in epoch_batch],
+            [sample[1] for sample in epoch_batch],
+        )
+        completed_steps += steps_this_epoch
 
         validation_loss_total = 0.0
         validation_count = 0
