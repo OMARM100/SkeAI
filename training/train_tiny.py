@@ -8,6 +8,7 @@ To continue training from the last checkpoint:
 
     python -m training.train_tiny --resume
 
+Use --epochs to control the number of training epochs. The default is 100.
 The script reports setup, training, checkpoint and total elapsed time so
 performance changes can be measured directly on the target device.
 """
@@ -29,6 +30,8 @@ from src.skeai.trainer import Trainer
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = ROOT / "data" / "samples" / "tiny_corpus.txt"
 CHECKPOINT_PATH = ROOT / "models" / "tiny_character_model.json"
+DEFAULT_EPOCHS = 100
+BATCH_SIZE = 16
 
 
 def load_model(resume: bool, text: str) -> TinyCharacterLanguageModel:
@@ -53,13 +56,24 @@ def load_model(resume: bool, text: str) -> TinyCharacterLanguageModel:
 def main() -> None:
     total_start = perf_counter()
 
-    parser = argparse.ArgumentParser(description="Train SkeAI tiny language model.")
+    parser = argparse.ArgumentParser(
+        description="Train SkeAI tiny language model."
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
         help="Load the previous checkpoint before continuing training.",
     )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=DEFAULT_EPOCHS,
+        help=f"Number of training epochs (default: {DEFAULT_EPOCHS}).",
+    )
     args = parser.parse_args()
+
+    if args.epochs <= 0:
+        parser.error("--epochs must be greater than zero.")
 
     setup_start = perf_counter()
     text = CORPUS_PATH.read_text(encoding="utf-8")
@@ -78,12 +92,23 @@ def main() -> None:
         enable_timing=True,
     )
 
-    batches = dataset.all_batches(batch_size=16)
+    batches = dataset.all_batches(batch_size=BATCH_SIZE)
+    total_training_steps = len(batches) * args.epochs
     setup_seconds = perf_counter() - setup_start
+
+    print(
+        f"training_plan=epochs:{args.epochs} "
+        f"batches_per_epoch:{len(batches)} "
+        f"total_steps:{total_training_steps} "
+        f"batch_size:{BATCH_SIZE}"
+    )
 
     def report(epoch: int, batch: int, loss: float) -> None:
         if batch == 1 or epoch == 1:
-            print(f"epoch={epoch:03d} batch={batch:02d} loss={loss:.6f}")
+            print(
+                f"epoch={epoch:03d} batch={batch:02d} "
+                f"loss={loss:.6f}"
+            )
 
     def report_epoch(
         epoch: int,
@@ -105,7 +130,7 @@ def main() -> None:
     training_start = perf_counter()
     history = trainer.train_batches(
         batches,
-        epochs=50,
+        epochs=args.epochs,
         callback=report,
         epoch_callback=report_epoch,
     )
@@ -130,7 +155,10 @@ def main() -> None:
     print(f"total_seconds={total_seconds:.4f}")
 
     for prompt in ["hello", "مرحبا", "I ", "أنا "]:
-        print(f"{prompt!r} -> {model.generate(prompt, max_new_tokens=24)}")
+        print(
+            f"{prompt!r} -> "
+            f"{model.generate(prompt, max_new_tokens=24)}"
+        )
 
 
 if __name__ == "__main__":
