@@ -336,8 +336,10 @@ class SkeAIConversation:
         *,
         max_new_tokens: int = 48,
         temperature: float = 0.35,
-        top_k: int = 8,
+        top_k: int = 32,
         seed: int | None = 1234,
+        repetition_penalty: float = 1.15,
+        no_repeat_ngram_size: int = 3,
     ) -> str:
         if not isinstance(message, str):
             raise TypeError("message must be a string.")
@@ -356,6 +358,8 @@ class SkeAIConversation:
             temperature=temperature,
             top_k=top_k,
             seed=seed,
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
         ).strip()
 
         for label in (USER_LABEL, ASSISTANT_LABEL, SYSTEM_LABEL):
