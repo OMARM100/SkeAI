@@ -269,32 +269,42 @@ class SkeAIConversation:
         return "".join(parts)
 
     def _trim_to_context(self, prompt: str) -> str:
+        """Trim dialogue history while always preserving the self-model."""
         limit = self.model.config.context_length
         system_context = self._self_context()
         system_tokens = self.tokenizer.encode(system_context)
 
-        # The self-model is mandatory context. Older dialogue is expendable.
+        # The self-model is mandatory context. If it alone exceeds the model
+        # context, keep its beginning rather than dropping identity entirely.
         if len(system_tokens) >= limit:
-            return self.tokenizer.decode(system_tokens[:limit], skip_special_tokens=False)
+            return self.tokenizer.decode(
+                system_tokens[:limit],
+                skip_special_tokens=False,
+            )
 
         if not prompt.startswith(system_context):
             # Defensive fallback for callers providing a custom prompt.
             token_ids = self.tokenizer.encode(prompt)
             if len(token_ids) <= limit:
                 return prompt
-            return self.tokenizer.decode(token_ids[-limit:], skip_special_tokens=False)
+            return self.tokenizer.decode(
+                token_ids[-limit:],
+                skip_special_tokens=False,
+            )
 
         body = prompt[len(system_context):]
         marker = f"{USER_LABEL} "
-        chunks = [chunk for chunk in body.split(marker) if chunk]
-        if not chunks:
+        raw_chunks = [chunk for chunk in body.split(marker) if chunk]
+
+        if not raw_chunks:
             return system_context
 
-        current = marker + chunks[-1]
+        # The final chunk is always the current user turn followed by SkeAI:.
+        current = marker + raw_chunks[-1]
         current_tokens = self.tokenizer.encode(current)
 
+        # Identity + current turn have priority over older dialogue.
         if len(system_tokens) + len(current_tokens) > limit:
-            # Keep the identity block and the current user turn whenever possible.
             available = max(1, limit - len(system_tokens))
             current_ids = self.tokenizer.encode(current)
             return system_context + self.tokenizer.decode(
@@ -304,15 +314,20 @@ class SkeAIConversation:
 
         kept_reversed: list[str] = []
         used = len(system_tokens) + len(current_tokens)
-        for previous in reversed(chunks[:-1]):
+
+        # Add the newest previous turns first. Old turns are discarded first.
+        for previous in reversed(raw_chunks[:-1]):
             candidate = marker + previous
             candidate_tokens = self.tokenizer.encode(candidate)
+
             if used + len(candidate_tokens) > limit:
                 break
+
             kept_reversed.append(candidate)
             used += len(candidate_tokens)
 
         kept_reversed.reverse()
+
         return system_context + "".join(kept_reversed) + current
 
     def chat(
