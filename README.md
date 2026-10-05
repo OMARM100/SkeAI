@@ -128,3 +128,22 @@ This is a future direction. The current project is still a small learning and en
 SkeAI is built to understand the internals instead of hiding them behind a framework.
 
 The numerical engine is therefore built as a real native C++ core from the foundation, not as a thin optimization layer placed over Python container objects.
+
+
+## Level 2 — Experimental Transformer
+
+The repository now contains an isolated Level 2 path under `src/skeai/level2/`.
+It introduces a hybrid token/character tokenizer and a small causal Transformer
+while keeping Level 1 unchanged.
+
+Current Level 2 milestone:
+- Hybrid tokenizer with character fallback
+- Token + positional embeddings
+- 2-head causal self-attention
+- Residual feed-forward blocks
+- Checkpoint save/load
+- Forward-shape and checkpoint tests
+- Standalone benchmark: `python -m benchmarks.benchmark_level2`
+
+Level 2 training/backpropagation is the next implementation milestone after the
+forward architecture is validated.
