@@ -3646,13 +3646,6 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                     layers_object == nullptr ||
                     learning_rate_object == nullptr ||
                     weight_decay_object == nullptr) {
-                    vocabulary_object == nullptr ||
-                    context_object == nullptr ||
-                    d_model_object == nullptr ||
-                    heads_object == nullptr ||
-                    feed_forward_object == nullptr ||
-                    layers_object == nullptr ||
-                    learning_rate_object == nullptr) {
                     Py_DECREF(input_fast);
                     Py_DECREF(target_fast);
                     throw std::bad_alloc();
