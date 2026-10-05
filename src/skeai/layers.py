@@ -108,7 +108,12 @@ class Dense:
         self._cached_input = inputs
         return self._cached_output
 
-    def backward(self, grad_output: Tensor) -> Tensor:
+    def backward(
+        self,
+        grad_output: Tensor,
+        *,
+        compute_input_gradient: bool = True,
+    ) -> Tensor | None:
         if self._cached_input is None:
             raise RuntimeError("forward must be called before backward.")
 
