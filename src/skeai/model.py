@@ -33,6 +33,16 @@ class Sequential:
             output = layer.forward(output)
         return output
 
+    def forward_indexed(self, indices, batch_size: int) -> Tensor:
+        """Run the network using compact indexed input for the first Dense layer."""
+        first_layer = self.layers[0]
+        if not isinstance(first_layer, Dense):
+            raise ValueError("Indexed input requires a Dense first layer.")
+
+        output = first_layer.forward_indexed(indices, batch_size)
+        for layer in self.layers[1:]:
+            output = layer.forward(output)
+        return output
     def backward(
         self,
         gradient: Tensor,
