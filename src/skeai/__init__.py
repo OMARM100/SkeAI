@@ -13,6 +13,7 @@ from .trainer import Trainer
 from .optimizer import SGD
 from .tensor import Tensor
 from .tokenizer import CharacterTokenizer
+from .level2 import HybridTokenizer, TinyTransformerLM, TransformerConfig
 
 __all__ = [
     "BenchmarkResult",
@@ -28,6 +29,9 @@ __all__ = [
     "Tensor",
     "Tanh",
     "Trainer",
+    "HybridTokenizer",
+    "TinyTransformerLM",
+    "TransformerConfig",
     "benchmark",
     "generate_text",
 ]
