@@ -51,7 +51,6 @@ class Level2Trainer:
                 self.model.config.feed_forward_size,
                 self.model.config.n_layers,
                 self.optimizer.learning_rate,
-                target_weights,
             )
 
         logits = self.model.forward(list(inputs))
@@ -90,6 +89,7 @@ class Level2Trainer:
                 self.model.config.feed_forward_size,
                 self.model.config.n_layers,
                 self.optimizer.learning_rate,
+                target_weights,
             )
 
         total_loss = 0.0
