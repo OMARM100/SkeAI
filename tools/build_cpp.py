@@ -18,7 +18,41 @@ def find_compiler() -> str:
         if shutil.which(candidate):
             return candidate
 
-    raise RuntimeError("No C++ compiler found. Set the CXX environment variable.")
+    raise RuntimeError(
+        "No C++ compiler found. Set the CXX environment variable."
+    )
+
+
+def find_python_library() -> tuple[str, str]:
+    libdir = sysconfig.get_config_var("LIBDIR")
+    library = sysconfig.get_config_var("LDLIBRARY")
+
+    if not libdir or not library:
+        raise RuntimeError(
+            "Python library location is unavailable."
+        )
+
+    library_path = Path(libdir) / library
+
+    if not library_path.exists():
+        raise RuntimeError(
+            f"Python library was not found: {library_path}"
+        )
+
+    if not library.startswith("lib") or not library.endswith(
+        (".so", ".a", ".dylib")
+    ):
+        raise RuntimeError(
+            f"Unsupported Python library name: {library}"
+        )
+
+    library_name = library[3:]
+    for suffix in (".so", ".a", ".dylib"):
+        if library_name.endswith(suffix):
+            library_name = library_name[:-len(suffix)]
+            break
+
+    return str(libdir), library_name
 
 
 def main() -> None:
@@ -27,11 +61,15 @@ def main() -> None:
     package_dir = root / "src" / "skeai"
 
     if not source.exists():
-        raise FileNotFoundError(f"C++ engine source not found: {source}")
+        raise FileNotFoundError(
+            f"C++ engine source not found: {source}"
+        )
 
     extension_suffix = sysconfig.get_config_var("EXT_SUFFIX")
     if not extension_suffix:
-        raise RuntimeError("Python EXT_SUFFIX is unavailable.")
+        raise RuntimeError(
+            "Python EXT_SUFFIX is unavailable."
+        )
 
     for existing in package_dir.glob("_cpp*.so"):
         existing.unlink()
@@ -40,7 +78,11 @@ def main() -> None:
 
     include_dir = sysconfig.get_config_var("INCLUDEPY")
     if not include_dir:
-        raise RuntimeError("Python include directory is unavailable.")
+        raise RuntimeError(
+            "Python include directory is unavailable."
+        )
+
+    python_libdir, python_library = find_python_library()
 
     command = [
         find_compiler(),
@@ -49,14 +91,39 @@ def main() -> None:
         "-fPIC",
         "-shared",
         f"-I{include_dir}",
+        f"-L{python_libdir}",
+        f"-Wl,-rpath,{python_libdir}",
+        f"-l{python_library}",
     ]
-    command.extend(shlex.split(sysconfig.get_config_var("CXXFLAGS") or ""))
-    command.extend(shlex.split(os.environ.get("CXXFLAGS", "")))
-    command.extend([str(source), "-o", str(output)])
+
+    command.extend(
+        shlex.split(
+            sysconfig.get_config_var("CXXFLAGS") or ""
+        )
+    )
+    command.extend(
+        shlex.split(
+            os.environ.get("CXXFLAGS", "")
+        )
+    )
+
+    command.extend(
+        [
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
 
     print("Building SkeAI C++ engine:")
     print(" ".join(command))
-    subprocess.run(command, check=True)
+
+    subprocess.run(
+        command,
+        check=True,
+    )
+
+    print(f"Linked Python runtime: {python_libdir}/lib{python_library}.so")
     print(f"Built: {output}")
 
 
