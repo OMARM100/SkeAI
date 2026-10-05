@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from typing import List, Sequence, Tuple, Union
 
+from . import engine
+
 Number = Union[int, float]
 NestedNumbers = Union[Number, Sequence["NestedNumbers"]]
 
@@ -171,19 +173,7 @@ class Tensor:
         if inner != other_inner:
             raise ValueError("Incompatible shapes for matrix multiplication.")
 
-        left = self._data
-        right = other._data
-
-        result = [[0.0] * cols for _ in range(rows)]
-
-        for row_index in range(rows):
-            left_row = left[row_index]  # type: ignore[index]
-            result_row = result[row_index]
-            for inner_index in range(inner):
-                value = left_row[inner_index]
-                right_row = right[inner_index]  # type: ignore[index]
-                for col_index in range(cols):
-                    result_row[col_index] += value * right_row[col_index]
+        result = engine.matmul(self._data, other._data)
 
         return Tensor._from_data(result, (rows, cols))
 
