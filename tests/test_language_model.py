@@ -26,6 +26,21 @@ class TinyLanguageModelTests(unittest.TestCase):
         generated = self.model.generate("hell", max_new_tokens=4, seed=1)
         self.assertIsInstance(generated, str)
 
+    def test_generation_preserves_prompt_with_unknown_character(self) -> None:
+        prompt = "🙂"
+        generated = self.model.generate(prompt, max_new_tokens=0)
+        self.assertEqual(generated, prompt)
+
+    def test_invalid_generation_controls(self) -> None:
+        with self.assertRaises(ValueError):
+            self.model.generate("hello", top_k=0)
+
+        with self.assertRaises(ValueError):
+            self.model.generate("hello", repetition_penalty=0.9)
+
+        with self.assertRaises(ValueError):
+            self.model.generate("hello", no_repeat_ngram_size=-1)
+
     def test_invalid_temperature(self) -> None:
         with self.assertRaises(ValueError):
             self.model.generate("hello", temperature=0.0)
