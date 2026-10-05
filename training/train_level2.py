@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import time
 from pathlib import Path
+from typing import Any
 
 from src.skeai.level2.tokenizer import HybridTokenizer
 from src.skeai.level2.transformer import TinyTransformerLM, TransformerConfig
@@ -15,10 +17,14 @@ from src.skeai.optimizer import SGD
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAIN_CORPUS = ROOT / "data" / "samples" / "tiny_corpus.txt"
-DIALOGUE_CORPUS = ROOT / "data" / "samples" / "tiny_dialogue.txt"
+DIALOGUE_JSON = ROOT / "data" / "samples" / "tiny_dialogue.json"
 VALIDATION_CORPUS = ROOT / "data" / "samples" / "tiny_validation.txt"
 DEFAULT_CHECKPOINT = ROOT / "models" / "level2_transformer.json"
 DEFAULT_TOKENIZER = ROOT / "models" / "level2_tokenizer.json"
+DEFAULT_METADATA = ROOT / "models" / "level2_training_metadata.json"
+
+USER_LABEL = "المستخدم:"
+ASSISTANT_LABEL = "SkeAI:"
 
 
 def make_samples(
@@ -42,8 +48,56 @@ def make_samples(
     return samples
 
 
+def load_dialogue_pairs(path: Path) -> list[tuple[str, str]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("Dialogue corpus must contain a JSON list.")
+
+    pairs: list[tuple[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        user = item.get("input")
+        response = item.get("response")
+        if isinstance(user, str) and isinstance(response, str):
+            user = " ".join(user.strip().split())
+            response = " ".join(response.strip().split())
+            if user and response:
+                pairs.append((user, response))
+
+    if not pairs:
+        raise ValueError("Dialogue corpus does not contain valid input/response pairs.")
+    return pairs
+
+
+def format_dialogue(user: str, response: str) -> str:
+    # The explicit roles teach the model that the text after SkeAI: is a
+    # response, instead of merely another continuation of the corpus.
+    return f"{USER_LABEL} {user}\n{ASSISTANT_LABEL} {response}"
+
+
+def build_dialogue_samples(
+    pairs: list[tuple[str, str]],
+    tokenizer: HybridTokenizer,
+    context_length: int,
+) -> list[tuple[list[int], list[int]]]:
+    samples: list[tuple[list[int], list[int]]] = []
+    for user, response in pairs:
+        text = format_dialogue(user, response)
+        tokens = tokenizer.encode(text, add_bos=True, add_eos=True)
+        samples.extend(
+            make_samples(
+                tokens,
+                context_length,
+                stride=max(1, context_length // 3),
+            )
+        )
+    return samples
+
+
 def build_tokenizer(
     train_text: str,
+    dialogue_texts: list[str],
     *,
     vocab_size: int,
     resume: bool,
@@ -57,7 +111,11 @@ def build_tokenizer(
         return HybridTokenizer.load(tokenizer_path)
 
     tokenizer = HybridTokenizer()
-    tokenizer.fit([train_text], max_units=vocab_size, min_frequency=2)
+    tokenizer.fit(
+        [train_text, *dialogue_texts],
+        max_units=vocab_size,
+        min_frequency=2,
+    )
     return tokenizer
 
 
@@ -66,9 +124,10 @@ def main() -> None:
         description="Train SkeAI Level 2 Transformer."
     )
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--max-train-steps", type=int, default=500)
+    parser.add_argument("--max-train-steps", type=int, default=200)
     parser.add_argument("--max-validation-steps", type=int, default=50)
-    parser.add_argument("--context", type=int, default=64)
+    parser.add_argument("--dialogue-repeat", type=int, default=8)
+    parser.add_argument("--context", type=int, default=32)
     parser.add_argument("--vocab", type=int, default=512)
     parser.add_argument("--d-model", type=int, default=32)
     parser.add_argument("--heads", type=int, default=2)
@@ -86,22 +145,24 @@ def main() -> None:
         raise ValueError("epochs and max-train-steps must be positive.")
     if args.max_validation_steps <= 0:
         raise ValueError("max-validation-steps must be positive.")
+    if args.dialogue_repeat <= 0:
+        raise ValueError("dialogue-repeat must be positive.")
     if args.patience < 0:
         raise ValueError("patience cannot be negative.")
     if args.min_delta < 0.0:
         raise ValueError("min-delta cannot be negative.")
 
     tokenizer_path = args.checkpoint.with_name("level2_tokenizer.json")
+    metadata_path = args.checkpoint.with_name("level2_training_metadata.json")
 
-    train_text = (
-        TRAIN_CORPUS.read_text(encoding="utf-8")
-        + "\n"
-        + DIALOGUE_CORPUS.read_text(encoding="utf-8")
-    )
+    train_text = TRAIN_CORPUS.read_text(encoding="utf-8")
     validation_text = VALIDATION_CORPUS.read_text(encoding="utf-8")
+    dialogue_pairs = load_dialogue_pairs(DIALOGUE_JSON)
+    dialogue_texts = [format_dialogue(user, response) for user, response in dialogue_pairs]
 
     tokenizer = build_tokenizer(
         train_text,
+        dialogue_texts,
         vocab_size=args.vocab,
         resume=args.resume,
         tokenizer_path=tokenizer_path,
@@ -141,10 +202,16 @@ def main() -> None:
         model = TinyTransformerLM(tokenizer.vocab_size, config)
 
     context_length = model.config.context_length
-    train_samples = make_samples(
+
+    language_samples = make_samples(
         train_tokens,
         context_length,
         stride=max(1, context_length // 2),
+    )
+    dialogue_samples = build_dialogue_samples(
+        dialogue_pairs,
+        tokenizer,
+        context_length,
     )
     validation_samples = make_samples(
         validation_tokens,
@@ -152,8 +219,15 @@ def main() -> None:
         stride=context_length,
     )
 
-    if not train_samples or not validation_samples:
-        raise ValueError("Corpus is too short for the selected context.")
+    if not language_samples or not dialogue_samples or not validation_samples:
+        raise ValueError("One of the training or validation corpora is too short.")
+
+    # Dialogue examples are deliberately oversampled. This is the first
+    # conversation milestone, so the model must spend meaningful training
+    # capacity learning turn boundaries, identity, and short answers.
+    training_pool = language_samples + (
+        dialogue_samples * args.dialogue_repeat
+    )
 
     trainer = Level2Trainer(
         model=model,
@@ -169,7 +243,11 @@ def main() -> None:
     print("=== SkeAI Level 2 Training ===")
     print(f"resume={args.resume}")
     print(f"vocabulary_size={tokenizer.vocab_size}")
-    print(f"train_samples={len(train_samples)}")
+    print(f"language_samples={len(language_samples)}")
+    print(f"dialogue_pairs={len(dialogue_pairs)}")
+    print(f"dialogue_samples={len(dialogue_samples)}")
+    print(f"dialogue_repeat={args.dialogue_repeat}")
+    print(f"training_pool={len(training_pool)}")
     print(f"validation_samples={len(validation_samples)}")
     print(f"parameter_count={model.parameter_count()}")
     print(f"context_length={context_length}")
@@ -184,21 +262,21 @@ def main() -> None:
     print("matrix_backend=cpp")
 
     for epoch in range(1, args.epochs + 1):
-        order = list(range(len(train_samples)))
+        order = list(range(len(training_pool)))
         rng.shuffle(order)
 
-        epoch_batch = [
-            train_samples[index]
+        selected = [
+            training_pool[index]
             for index in order[:args.max_train_steps]
         ]
-        if not epoch_batch:
+        if not selected:
             raise RuntimeError("No training samples selected for epoch.")
 
-        steps_this_epoch = len(epoch_batch)
+        steps_this_epoch = len(selected)
         epoch_start = time.perf_counter()
         train_loss = trainer.train_batch(
-            [sample[0] for sample in epoch_batch],
-            [sample[1] for sample in epoch_batch],
+            [sample[0] for sample in selected],
+            [sample[1] for sample in selected],
         )
         completed_steps += steps_this_epoch
 
@@ -244,10 +322,33 @@ def main() -> None:
             break
 
     total_seconds = time.perf_counter() - started
+    metadata: dict[str, Any] = {
+        "version": 1,
+        "model": "level2_transformer",
+        "training_backend": "cpp_batch_fused",
+        "language_samples": len(language_samples),
+        "dialogue_pairs": len(dialogue_pairs),
+        "dialogue_samples": len(dialogue_samples),
+        "dialogue_repeat": args.dialogue_repeat,
+        "training_pool": len(training_pool),
+        "completed_steps": completed_steps,
+        "best_validation_loss": best_validation,
+        "parameter_count": model.parameter_count(),
+        "context_length": model.config.context_length,
+        "vocabulary_size": tokenizer.vocab_size,
+        "total_seconds": total_seconds,
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     print(f"completed_steps={completed_steps}")
     print(f"best_validation_loss={best_validation:.6f}")
     print(f"checkpoint={args.checkpoint}")
     print(f"tokenizer={tokenizer_path}")
+    print(f"metadata={metadata_path}")
     print(f"total_seconds={total_seconds:.3f}")
 
 
