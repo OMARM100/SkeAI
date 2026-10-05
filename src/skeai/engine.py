@@ -234,7 +234,6 @@ def transformer_train_batch(
     feed_forward_size: int,
     n_layers: int,
     learning_rate: float,
-    weight_decay: float = 0.0,
 ) -> float:
     if len(inputs) != len(targets):
         raise ValueError("inputs and targets batch sizes must match.")
@@ -253,7 +252,6 @@ def transformer_train_batch(
             int(feed_forward_size),
             int(n_layers),
             float(learning_rate),
-            float(weight_decay),
         )
     )
 
@@ -269,7 +267,6 @@ def transformer_train_step(
     feed_forward_size: int,
     n_layers: int,
     learning_rate: float,
-    weight_decay: float = 0.0,
 ) -> float:
     native_parameters = list(parameters)
     native_tokens = list(token_ids)
@@ -293,7 +290,6 @@ def transformer_train_step(
             int(n_layers),
             len(native_tokens),
             float(learning_rate),
-            float(weight_decay),
         )
     )
 
