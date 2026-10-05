@@ -10,10 +10,17 @@ from .tensor import Tensor
 class SGD:
     """Plain stochastic gradient descent with in-place parameter updates."""
 
-    def __init__(self, learning_rate: float = 0.01) -> None:
+    def __init__(
+        self,
+        learning_rate: float = 0.01,
+        weight_decay: float = 0.0,
+    ) -> None:
         if learning_rate <= 0.0:
             raise ValueError("learning_rate must be greater than zero.")
+        if weight_decay < 0.0:
+            raise ValueError("weight_decay cannot be negative.")
         self.learning_rate = float(learning_rate)
+        self.weight_decay = float(weight_decay)
 
     def step(
         self,
@@ -38,6 +45,7 @@ class SGD:
                 parameter._storage,
                 gradient._storage,
                 self.learning_rate,
+                self.weight_decay,
             )
 
 
