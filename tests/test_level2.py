@@ -41,6 +41,16 @@ class Level2TokenizerTests(unittest.TestCase):
         encoded = tokenizer.encode("مرحبا hello")
         self.assertLess(len(encoded), len("مرحبا hello"))
 
+    def test_encode_decode_preserves_training_text(self) -> None:
+        text = "مرحبا SkeAI!\nC++ يعمل بشكل جيد."
+        tokenizer = HybridTokenizer()
+        tokenizer.fit([text], max_units=128, min_frequency=1)
+
+        encoded = tokenizer.encode(text)
+        decoded = tokenizer.decode(encoded)
+
+        self.assertEqual(decoded, text)
+
     def test_unseen_text_falls_back_to_characters(self) -> None:
         tokenizer = HybridTokenizer()
         tokenizer.fit(["hello"], max_units=16, min_frequency=2)
