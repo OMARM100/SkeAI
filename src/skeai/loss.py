@@ -1,4 +1,4 @@
-"""Loss functions for SkeAI 0.2."""
+"""Loss functions for SkeAI 0.3."""
 
 from __future__ import annotations
 
@@ -59,20 +59,6 @@ class CrossEntropyLoss:
         self._targets: List[int] | None = None
         self._gradient: Tensor | None = None
 
-    @staticmethod
-    def _softmax(row: Sequence[float]) -> List[float]:
-        if not row:
-            return []
-
-        maximum = max(row)
-        exponentials = [math.exp(value - maximum) for value in row]
-        total = sum(exponentials)
-
-        if total <= 0.0 or not math.isfinite(total):
-            raise ValueError("Invalid softmax normalization.")
-
-        return [value / total for value in exponentials]
-
     def forward(self, logits: Tensor, targets: Sequence[int]) -> float:
         if logits.ndim != 2:
             raise ValueError("CrossEntropyLoss expects rank-2 logits.")
@@ -83,9 +69,18 @@ class CrossEntropyLoss:
             raise ValueError("Number of targets must match batch size.")
 
         logits_data = logits._data  # type: ignore[attr-defined]
-        probabilities: List[List[float]] = []
-        gradient: List[List[float]] = []
+
+        # Reuse the gradient Tensor between steps. Only allocate when the
+        # current batch shape changes, such as the final partial batch.
+        if self._gradient is None or self._gradient.shape != logits.shape:
+            self._gradient = Tensor._from_data(
+                [[0.0] * class_count for _ in range(batch_size)],
+                logits.shape,
+            )
+
+        gradient = self._gradient._data  # type: ignore[attr-defined]
         total_loss = 0.0
+        probabilities: List[List[float]] = []
 
         for row_index in range(batch_size):
             row = logits_data[row_index]
@@ -101,34 +96,31 @@ class CrossEntropyLoss:
                 raise ValueError("Invalid softmax normalization.")
 
             inverse_total = 1.0 / total
-            probability_row = [
-                value * inverse_total
-                for value in probability_row
-            ]
-
             target = targets[row_index]
+
             if not isinstance(target, int):
                 raise TypeError("Class targets must be integers.")
             if target < 0 or target >= class_count:
                 raise ValueError(f"Target class out of range: {target}")
 
-            probability = max(probability_row[target], 1e-12)
-            total_loss -= math.log(probability)
+            gradient_row = gradient[row_index]
+
+            for index in range(class_count):
+                probability = probability_row[index] * inverse_total
+                probability_row[index] = probability
+                gradient_row[index] = probability / batch_size
+
+            target_probability = max(probability_row[target], 1e-12)
+            total_loss -= math.log(target_probability)
+            gradient_row[target] -= 1.0 / batch_size
 
             probabilities.append(probability_row)
-            gradient.append(probability_row[:])
-            gradient[row_index][target] -= 1.0
 
+        # Keep these cached for compatibility/debugging; backward() does not
+        # allocate a new tensor anymore.
         self._probabilities = probabilities
         self._targets = list(targets)
 
-        scale = 1.0 / batch_size if batch_size else 0.0
-        if scale:
-            for row in gradient:
-                for index in range(len(row)):
-                    row[index] *= scale
-
-        self._gradient = Tensor(gradient)
         return total_loss / batch_size if batch_size else 0.0
 
     def backward(self) -> Tensor:
