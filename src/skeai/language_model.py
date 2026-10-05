@@ -61,9 +61,29 @@ class TinyCharacterLanguageModel:
 
         return Tensor([values])
 
-    def forward(self, token_ids: List[int]) -> Tensor:
-        return self.network.forward(self.encode_context(token_ids))
+    def encode_context_indices(self, token_ids: List[int]) -> List[int]:
+        context = list(token_ids[-self.context_length:])
 
+        if len(context) < self.context_length:
+            context = [self.tokenizer.bos_id] * (
+                self.context_length - len(context)
+            ) + context
+
+        indices: List[int] = []
+        vocab_size = self.tokenizer.vocab_size
+
+        for position, token_id in enumerate(context):
+            if token_id < 0 or token_id >= vocab_size:
+                raise ValueError(f"Token ID out of range: {token_id}")
+            indices.append(position * vocab_size + token_id)
+
+        return indices
+
+    def forward(self, token_ids: List[int]) -> Tensor:
+        return self.network.forward_indexed(
+            self.encode_context_indices(token_ids),
+            batch_size=1,
+        )
     @staticmethod
     def _argmax(values: List[float], candidates: List[int] | None = None) -> int:
         if candidates is None:
