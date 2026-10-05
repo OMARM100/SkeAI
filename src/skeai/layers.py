@@ -90,6 +90,12 @@ class Dense:
         for batch in range(batch_size):
             x_row = x[batch]
             result_row = result[batch]
+
+            # The output buffer is reused across steps, so reset it before
+            # accumulating the new matrix product.
+            for output_index in range(output_size):
+                result_row[output_index] = 0.0
+
             for input_index in range(input_size):
                 value = x_row[input_index]
                 w_row = w[input_index]
