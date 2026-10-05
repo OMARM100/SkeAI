@@ -38,9 +38,15 @@ class CheckpointTests(unittest.TestCase):
             loaded.context_length,
             model.context_length,
         )
+        model.set_response_memory({"مرحبا": "أهلًا بك!"})
+
         self.assertEqual(
             loaded.hidden_size,
             model.hidden_size,
+        )
+        self.assertEqual(
+            loaded.memorized_response("مرحبا"),
+            "أهلًا بك!",
         )
 
 
