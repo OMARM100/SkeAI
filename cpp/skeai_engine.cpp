@@ -3762,6 +3762,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         Py_XDECREF(layers_object);
         Py_XDECREF(learning_rate_object);
         Py_XDECREF(weight_decay_object);
+        Py_XDECREF(step_args);
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
         PyErr_SetString(PyExc_RuntimeError, exc.what());
