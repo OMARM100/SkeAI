@@ -103,6 +103,44 @@ class Level2TransformerTests(unittest.TestCase):
         self.assertAlmostEqual(analytic, numerical, places=3)
         self.assertGreater(loss_value, 0.0)
 
+    def test_attention_q_gradient_matches_finite_difference(self) -> None:
+        config = TransformerConfig(
+            context_length=4,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=12,
+            n_layers=1,
+            max_vocab_size=12,
+            seed=9,
+        )
+        model = TinyTransformerLM(vocab_size=8, config=config)
+        loss = CrossEntropyLoss()
+
+        inputs = [1, 2, 3, 4]
+        targets = [2, 3, 4, 1]
+
+        logits = model.forward(inputs)
+        loss.forward(logits, targets)
+        gradients = model.backward(loss.backward())
+        analytic = gradients["blocks.0.wq"].to_list()[0][0]
+
+        weights = model.blocks[0]["wq"].to_list()
+        epsilon = 1e-5
+
+        weights[0][0] += epsilon
+        model.blocks[0]["wq"] = Tensor(weights)
+        plus = loss.forward(model.forward(inputs), targets)
+
+        weights[0][0] -= 2.0 * epsilon
+        model.blocks[0]["wq"] = Tensor(weights)
+        minus = loss.forward(model.forward(inputs), targets)
+
+        weights[0][0] += epsilon
+        model.blocks[0]["wq"] = Tensor(weights)
+
+        numerical = (plus - minus) / (2.0 * epsilon)
+        self.assertAlmostEqual(analytic, numerical, places=3)
+
     def test_attention_training_reduces_loss(self) -> None:
         config = TransformerConfig(
             context_length=6,
