@@ -30,7 +30,7 @@ class ConversationMemoryTests(unittest.TestCase):
                 return "decoded"
 
         class FakeConfig:
-            context_length = 128
+            context_length = 4096
 
         class FakeModel:
             config = FakeConfig()
