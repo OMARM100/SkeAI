@@ -42,8 +42,20 @@ class TrainingPipelineTests(unittest.TestCase):
 
         self.assertTrue(full)
         self.assertTrue(focused)
-        self.assertTrue(all(len(inputs) == 8 for inputs, _ in focused))
-        self.assertTrue(all(len(targets) == 8 for _, targets in focused))
+        self.assertTrue(
+            all(
+                len(inputs) == 8
+                and len(targets) == 8
+                and len(weights) == 8
+                for inputs, targets, weights in focused
+            )
+        )
+        self.assertTrue(
+            all(
+                any(weight > 0.0 for weight in weights)
+                for _, _, weights in focused
+            )
+        )
 
     def test_learning_rate_warms_up_then_decays(self) -> None:
         values = [
