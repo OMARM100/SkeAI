@@ -2688,7 +2688,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         caches.resize(layers);
 
         for (std::size_t layer = 0; layer < layers; ++layer) {
-            const std::size_t base = 2 + layer * 6;
+            const std::size_t base = 3 + layer * 6;
             const StorageObject* wq_storage = parameters[base + 0];
             const StorageObject* wk_storage = parameters[base + 1];
             const StorageObject* wv_storage = parameters[base + 2];
@@ -2895,7 +2895,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
              reverse < layers;
              ++reverse) {
             const std::size_t layer = layers - 1 - reverse;
-            const std::size_t base = 2 + layer * 6;
+            const std::size_t base = 3 + layer * 6;
             const StorageObject* wq_storage = parameters[base + 0];
             const StorageObject* wk_storage = parameters[base + 1];
             const StorageObject* wv_storage = parameters[base + 2];
@@ -3057,17 +3057,6 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                         d_scores,
                         kh
                     );
-
-                for (std::size_t row = 0;
-                     row < d_vh.rows;
-                     ++row) {
-                    for (std::size_t column = 0;
-                         column < d_vh.cols;
-                         ++column) {
-                        d_vh.at(row, column) =
-                            d_vh.at(row, column);
-                    }
-                }
 
                 train_write_slice(
                     d_q,
