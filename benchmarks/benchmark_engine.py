@@ -110,6 +110,110 @@ def profile_model_layers(
     )
 
 
+def profile_dense_parts(
+    dense: Dense,
+    inputs: Tensor,
+    grad_output: Tensor,
+    repeats: int = 5,
+) -> dict[str, float]:
+    """Profile the internal arithmetic sections of a Dense layer."""
+    dense.forward(inputs)
+
+    output_data = dense._cached_output._data  # type: ignore[union-attr,attr-defined]
+    input_data = inputs._data  # type: ignore[attr-defined]
+    weight_data = dense.weights._data  # type: ignore[attr-defined]
+    bias_data = dense.bias._data  # type: ignore[attr-defined]
+    grad_output_data = grad_output._data  # type: ignore[attr-defined]
+    grad_weight_data = dense.grad_weights._data  # type: ignore[attr-defined]
+    grad_bias_data = dense.grad_bias._data  # type: ignore[attr-defined]
+
+    batch_size, input_size = inputs.shape
+    output_size = dense.weights.shape[1]
+
+    totals = {
+        "dense1_forward_reset_ms": 0.0,
+        "dense1_forward_matmul_ms": 0.0,
+        "dense1_forward_bias_ms": 0.0,
+        "dense1_backward_clear_grad_w_ms": 0.0,
+        "dense1_backward_clear_grad_b_ms": 0.0,
+        "dense1_backward_grad_b_ms": 0.0,
+        "dense1_backward_grad_w_ms": 0.0,
+    }
+
+    for _ in range(repeats):
+        start = perf_counter()
+        for batch in range(batch_size):
+            result_row = output_data[batch]
+            for output_index in range(output_size):
+                result_row[output_index] = 0.0
+        totals["dense1_forward_reset_ms"] += (perf_counter() - start) * 1000.0
+
+        start = perf_counter()
+        for batch in range(batch_size):
+            x_row = input_data[batch]
+            result_row = output_data[batch]
+            for input_index in range(input_size):
+                value = x_row[input_index]
+                weight_row = weight_data[input_index]
+                for output_index in range(output_size):
+                    result_row[output_index] += value * weight_row[output_index]
+        totals["dense1_forward_matmul_ms"] += (perf_counter() - start) * 1000.0
+
+        start = perf_counter()
+        for batch in range(batch_size):
+            result_row = output_data[batch]
+            for output_index in range(output_size):
+                result_row[output_index] += bias_data[output_index]
+        totals["dense1_forward_bias_ms"] += (perf_counter() - start) * 1000.0
+
+        start = perf_counter()
+        for input_index in range(input_size):
+            grad_weight_row = grad_weight_data[input_index]
+            for output_index in range(output_size):
+                grad_weight_row[output_index] = 0.0
+        totals["dense1_backward_clear_grad_w_ms"] += (
+            (perf_counter() - start) * 1000.0
+        )
+
+        start = perf_counter()
+        for output_index in range(output_size):
+            grad_bias_data[output_index] = 0.0
+        totals["dense1_backward_clear_grad_b_ms"] += (
+            (perf_counter() - start) * 1000.0
+        )
+
+        start = perf_counter()
+        for batch in range(batch_size):
+            go_row = grad_output_data[batch]
+            for output_index in range(output_size):
+                grad_bias_data[output_index] += go_row[output_index]
+        totals["dense1_backward_grad_b_ms"] += (
+            (perf_counter() - start) * 1000.0
+        )
+
+        for input_index in range(input_size):
+            grad_weight_row = grad_weight_data[input_index]
+            for output_index in range(output_size):
+                grad_weight_row[output_index] = 0.0
+
+        start = perf_counter()
+        input_range = range(input_size)
+        output_range = range(output_size)
+        for batch in range(batch_size):
+            x_row = input_data[batch]
+            go_row = grad_output_data[batch]
+            for input_index in input_range:
+                x_value = x_row[input_index]
+                grad_weight_row = grad_weight_data[input_index]
+                for output_index in output_range:
+                    grad_weight_row[output_index] += x_value * go_row[output_index]
+        totals["dense1_backward_grad_w_ms"] += (
+            (perf_counter() - start) * 1000.0
+        )
+
+    return {key: value / repeats for key, value in totals.items()}
+
+
 def main() -> None:
     print("=== SkeAI Engine Benchmark ===")
     print(f"python={platform.python_version()}")
@@ -263,6 +367,24 @@ def main() -> None:
 
     print(f"profile_forward_layers_total={forward_total:.3f}ms")
     print(f"profile_backward_layers_total={backward_total:.3f}ms")
+
+    dense1 = profile_model.network.layers[0]
+    dense1_grad_output = make_matrix(
+        inputs.shape[0],
+        dense1.weights.shape[1],
+        scale=0.001,
+    )
+    dense1_parts = profile_dense_parts(
+        dense1,
+        inputs,
+        dense1_grad_output,
+        repeats=5,
+    )
+
+    print("=== Dense #1 Internal Profile ===")
+    for key, value in dense1_parts.items():
+        print(f"{key}={value:.3f}ms")
+
     print(f"model_parameters={model.network.parameter_count()}")
 
 
