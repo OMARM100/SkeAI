@@ -45,7 +45,8 @@ class LayerTests(unittest.TestCase):
             compute_input_gradient=False,
         )
 
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.shape, (2, 3))
         self.assertEqual(layer.gradients()["weights"].shape, (3, 2))
         self.assertEqual(layer.gradients()["bias"].shape, (2,))
 
