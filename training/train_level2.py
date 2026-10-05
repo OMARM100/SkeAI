@@ -211,7 +211,18 @@ def build_response_focused_samples(
                     context_length,
                 )
                 if sample is not None:
-                    samples.append(sample)
+                    inputs, targets = sample
+                    sample_start = target_index - context_length
+                    weights = []
+                    for offset in range(context_length):
+                        global_target_position = sample_start + offset + 1
+                        weights.append(
+                            1.0
+                            if response_start <= global_target_position <= target_index
+                            else 0.0
+                        )
+                    if any(weight > 0.0 for weight in weights):
+                        samples.append((inputs, targets, weights))
 
             dialogue_lines.extend(
                 [
@@ -431,7 +442,10 @@ def main() -> None:
     training_pool = (
         language_samples
         + (dialogue_samples * args.dialogue_repeat)
-        + (response_focused_samples * args.response_focus_repeat)
+    )
+
+    response_training_pool = (
+        response_focused_samples * args.response_focus_repeat
     )
 
     trainer = Level2Trainer(
@@ -504,7 +518,15 @@ def main() -> None:
             [sample[0] for sample in selected],
             [sample[1] for sample in selected],
         )
-        completed_steps += steps_this_epoch
+
+        response_selected = list(response_training_pool)
+        rng.shuffle(response_selected)
+        response_loss = trainer.train_batch(
+            [sample[0] for sample in response_selected],
+            [sample[1] for sample in response_selected],
+            [sample[2] for sample in response_selected],
+        )
+        completed_steps += steps_this_epoch + len(response_selected)
 
         language_validation_total = 0.0
         language_validation_count = 0
@@ -521,8 +543,12 @@ def main() -> None:
 
         response_focused_validation_total = 0.0
         response_focused_validation_count = 0
-        for inputs, targets in response_focused_validation_samples:
-            response_focused_validation_total += trainer.evaluate(inputs, targets)
+        for inputs, targets, weights in response_focused_validation_samples:
+            response_focused_validation_total += trainer.evaluate_weighted(
+                inputs,
+                targets,
+                weights,
+            )
             response_focused_validation_count += 1
 
         language_validation_loss = (
@@ -563,6 +589,7 @@ def main() -> None:
             f"epoch={epoch} "
             f"epoch_learning_rate={epoch_learning_rate:.8f} "
             f"train_loss={train_loss:.6f} "
+            f"response_train_loss={response_loss:.6f} "
             f"validation_loss={validation_loss:.6f} "
             f"language_validation_loss={language_validation_loss:.6f} "
             f"dialogue_validation_loss={dialogue_validation_loss:.6f} "
@@ -607,6 +634,7 @@ def main() -> None:
         "warmup_epochs": args.warmup_epochs,
         "final_learning_rate_scale": args.final_learning_rate_scale,
         "training_pool": len(training_pool),
+        "response_training_pool": len(response_training_pool),
         "completed_steps": completed_steps,
         "best_validation_loss": best_validation,
         "parameter_count": model.parameter_count(),
