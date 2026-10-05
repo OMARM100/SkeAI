@@ -10,6 +10,7 @@ import math
 import random
 from typing import Dict
 
+from . import engine
 from .tensor import Tensor
 
 
@@ -85,25 +86,12 @@ class Dense:
         b = self.bias._data  # type: ignore[attr-defined]
         result = self._cached_output._data  # type: ignore[union-attr]
 
-        # Reuse the output buffer and compute matrix multiplication directly.
-        # The loop order keeps each weight row contiguous.
-        for batch in range(batch_size):
-            x_row = x[batch]
-            result_row = result[batch]
-
-            # The output buffer is reused across steps, so reset it before
-            # accumulating the new matrix product.
-            for output_index in range(output_size):
-                result_row[output_index] = 0.0
-
-            for input_index in range(input_size):
-                value = x_row[input_index]
-                w_row = w[input_index]
-                for output_index in range(output_size):
-                    result_row[output_index] += value * w_row[output_index]
-
-            for output_index in range(output_size):
-                result_row[output_index] += b[output_index]
+        engine.dense_forward(
+            x,
+            w,
+            b,
+            result,
+        )
 
         self._cached_input = inputs
         return self._cached_output
@@ -136,49 +124,15 @@ class Dense:
         grad_b = self.grad_bias._data  # type: ignore[attr-defined]
         grad_x = self._cached_grad_input._data  # type: ignore[union-attr]
 
-        # Clear reusable gradient buffers.
-        for input_index in range(input_size):
-            grad_w_row = grad_w[input_index]
-            for output_index in range(output_size):
-                grad_w_row[output_index] = 0.0
-
-        for output_index in range(output_size):
-            grad_b[output_index] = 0.0
-
-        # Fuse grad_W, grad_b, and grad_X into one batch traversal.
-        # This keeps x/go rows hot and removes a second full traversal of the
-        # batch. The arithmetic is unchanged; only the Python loop structure
-        # is optimized.
-        input_range = range(input_size)
-        output_range = range(output_size)
-
-        for batch in range(batch_size):
-            x_row = x[batch]
-            go_row = go[batch]
-            grad_x_row = grad_x[batch]
-
-            for output_index in output_range:
-                grad_b[output_index] += go_row[output_index]
-
-            for input_index in input_range:
-                x_value = x_row[input_index]
-                grad_w_row = grad_w[input_index]
-
-                if compute_input_gradient:
-                    weight_row = w[input_index]
-                    total = 0.0
-
-                    for output_index in output_range:
-                        grad_value = go_row[output_index]
-                        grad_w_row[output_index] += x_value * grad_value
-                        total += grad_value * weight_row[output_index]
-
-                    grad_x_row[input_index] = total
-                else:
-                    for output_index in output_range:
-                        grad_w_row[output_index] += (
-                            x_value * go_row[output_index]
-                        )
+        engine.dense_backward(
+            x,
+            go,
+            w,
+            grad_w,
+            grad_b,
+            grad_x,
+            compute_input_gradient,
+        )
 
         return self._cached_grad_input
 
