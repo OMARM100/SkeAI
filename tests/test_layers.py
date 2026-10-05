@@ -35,6 +35,20 @@ class LayerTests(unittest.TestCase):
         self.assertEqual(layer.gradients()["weights"].shape, (3, 2))
         self.assertEqual(layer.gradients()["bias"].shape, (2,))
 
+    def test_dense_can_skip_input_gradient(self) -> None:
+        layer = Dense(3, 2, seed=1)
+        inputs = Tensor([[1, 2, 3], [4, 5, 6]])
+        layer.forward(inputs)
+
+        result = layer.backward(
+            Tensor([[1, 1], [1, 1]]),
+            compute_input_gradient=False,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(layer.gradients()["weights"].shape, (3, 2))
+        self.assertEqual(layer.gradients()["bias"].shape, (2,))
+
     def test_relu(self) -> None:
         layer = ReLU()
         output = layer.forward(Tensor([[-2, 0, 3]]))
