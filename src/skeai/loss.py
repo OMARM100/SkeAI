@@ -1,13 +1,9 @@
-"""Loss functions for SkeAI 0.1.
-
-The first language-model experiments will use categorical cross-entropy on
-logits. Mean-squared error is included as a simple debugging loss.
-"""
+"""Loss functions for SkeAI 0.2."""
 
 from __future__ import annotations
 
 import math
-from typing import List, Sequence, Tuple
+from typing import List, Sequence
 
 from .tensor import Tensor
 
@@ -61,6 +57,7 @@ class CrossEntropyLoss:
     def __init__(self) -> None:
         self._probabilities: List[List[float]] | None = None
         self._targets: List[int] | None = None
+        self._gradient: Tensor | None = None
 
     @staticmethod
     def _softmax(row: Sequence[float]) -> List[float]:
@@ -85,14 +82,31 @@ class CrossEntropyLoss:
         if len(targets) != batch_size:
             raise ValueError("Number of targets must match batch size.")
 
-        probabilities = [
-            self._softmax(row)
-            for row in logits.to_list()
-        ]
-
+        logits_data = logits._data  # type: ignore[attr-defined]
+        probabilities: List[List[float]] = []
+        gradient: List[List[float]] = []
         total_loss = 0.0
 
-        for probability_row, target in zip(probabilities, targets):
+        for row_index in range(batch_size):
+            row = logits_data[row_index]
+            maximum = max(row)
+
+            probability_row = [
+                math.exp(value - maximum)
+                for value in row
+            ]
+            total = sum(probability_row)
+
+            if total <= 0.0 or not math.isfinite(total):
+                raise ValueError("Invalid softmax normalization.")
+
+            inverse_total = 1.0 / total
+            probability_row = [
+                value * inverse_total
+                for value in probability_row
+            ]
+
+            target = targets[row_index]
             if not isinstance(target, int):
                 raise TypeError("Class targets must be integers.")
             if target < 0 or target >= class_count:
@@ -101,31 +115,26 @@ class CrossEntropyLoss:
             probability = max(probability_row[target], 1e-12)
             total_loss -= math.log(probability)
 
+            probabilities.append(probability_row)
+            gradient.append(probability_row[:])
+            gradient[row_index][target] -= 1.0
+
         self._probabilities = probabilities
         self._targets = list(targets)
 
+        scale = 1.0 / batch_size if batch_size else 0.0
+        if scale:
+            for row in gradient:
+                for index in range(len(row)):
+                    row[index] *= scale
+
+        self._gradient = Tensor(gradient)
         return total_loss / batch_size if batch_size else 0.0
 
     def backward(self) -> Tensor:
-        if self._probabilities is None or self._targets is None:
+        if self._gradient is None:
             raise RuntimeError("forward must be called before backward.")
-
-        batch_size = len(self._targets)
-        if batch_size == 0:
-            return Tensor([])
-
-        gradient = [row[:] for row in self._probabilities]
-
-        for row_index, target in enumerate(self._targets):
-            gradient[row_index][target] -= 1.0
-
-        scale = 1.0 / batch_size
-        gradient = [
-            [value * scale for value in row]
-            for row in gradient
-        ]
-
-        return Tensor(gradient)
+        return self._gradient
 
 
 __all__ = ["CrossEntropyLoss", "MeanSquaredError"]
