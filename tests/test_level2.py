@@ -282,6 +282,68 @@ class Level2TransformerTests(unittest.TestCase):
                 parameter_batch.to_list(),
             )
 
+    def test_native_batch_supports_variable_sequence_lengths(self) -> None:
+        config = TransformerConfig(
+            context_length=6,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=16,
+            n_layers=1,
+            max_vocab_size=16,
+            seed=31,
+        )
+        inputs = [
+            [1, 2, 1, 2, 1, 2],
+            [2, 3, 2, 3],
+        ]
+        targets = [
+            [2, 1, 2, 1, 2, 1],
+            [3, 2, 3, 2],
+        ]
+        weights = [
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            [0.25, 1.0, 1.0, 1.0],
+        ]
+
+        model_sequential = TinyTransformerLM(vocab_size=8, config=config)
+        model_batch = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_sequential = Level2Trainer(
+            model=model_sequential,
+            optimizer=SGD(learning_rate=0.01),
+        )
+        trainer_batch = Level2Trainer(
+            model=model_batch,
+            optimizer=SGD(learning_rate=0.01),
+        )
+
+        sequential_loss = (
+            trainer_sequential.train_step_weighted(
+                inputs[0],
+                targets[0],
+                weights[0],
+            )
+            + trainer_sequential.train_step_weighted(
+                inputs[1],
+                targets[1],
+                weights[1],
+            )
+        ) / 2.0
+        batch_loss = trainer_batch.train_batch(
+            inputs,
+            targets,
+            weights,
+        )
+
+        self.assertAlmostEqual(batch_loss, sequential_loss, places=10)
+        for parameter_sequential, parameter_batch in zip(
+            model_sequential.parameters().values(),
+            model_batch.parameters().values(),
+        ):
+            self.assertEqual(
+                parameter_sequential.to_list(),
+                parameter_batch.to_list(),
+            )
+
     def test_attention_training_reduces_loss(self) -> None:
         config = TransformerConfig(
             context_length=6,
