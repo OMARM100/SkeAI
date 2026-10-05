@@ -173,9 +173,27 @@ class Dense:
         return self._cached_grad_input
 
     def parameters(self) -> Dict[str, Tensor]:
+        # Keep the fast cached mapping during normal training, but refresh it
+        # if a caller replaces a parameter tensor.
+        if (
+            self._parameter_cache["weights"] is not self.weights
+            or self._parameter_cache["bias"] is not self.bias
+        ):
+            self._parameter_cache = {
+                "weights": self.weights,
+                "bias": self.bias,
+            }
         return self._parameter_cache
 
     def gradients(self) -> Dict[str, Tensor]:
+        if (
+            self._gradient_cache["weights"] is not self.grad_weights
+            or self._gradient_cache["bias"] is not self.grad_bias
+        ):
+            self._gradient_cache = {
+                "weights": self.grad_weights,
+                "bias": self.grad_bias,
+            }
         return self._gradient_cache
 
 
