@@ -211,7 +211,6 @@ def main() -> None:
             validation_loss_total += trainer.evaluate(inputs, targets)
             validation_count += 1
 
-        train_loss = train_loss_total / max(steps_this_epoch, 1)
         validation_loss = validation_loss_total / max(validation_count, 1)
         epoch_seconds = time.perf_counter() - epoch_start
         steps_per_second = steps_this_epoch / max(epoch_seconds, 1e-9)
