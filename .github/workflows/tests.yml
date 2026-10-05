@@ -32,3 +32,11 @@ jobs:
 
       - name: Run Level 2 benchmark
         run: python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16 --batch-sizes 1,4,8,16,32
+
+      - name: Profile native transformer
+        env:
+          SKEAI_CPP_PROFILE: "1"
+        run: python -m benchmarks.benchmark_level2 --steps 1 --warmup-steps 0 --batch-size 1 --batch-sizes 1
+
+      - name: Run Level 2 training regression
+        run: python -m training.train_level2 --epochs 1 --max-train-steps 50 --max-validation-steps 5 --context 32
