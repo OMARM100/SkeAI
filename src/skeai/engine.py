@@ -234,25 +234,32 @@ def transformer_train_batch(
     feed_forward_size: int,
     n_layers: int,
     learning_rate: float,
+    target_weights: Sequence[Sequence[float]] | None = None,
 ) -> float:
     if len(inputs) != len(targets):
         raise ValueError("inputs and targets batch sizes must match.")
     if not inputs:
         raise ValueError("training batch cannot be empty.")
 
-    return float(
-        _require_cpp().transformer_train_batch(
-            [parameter for parameter in parameters],
-            [list(sequence) for sequence in inputs],
-            [list(sequence) for sequence in targets],
-            int(vocabulary_size),
-            int(context_length),
-            int(d_model),
-            int(n_heads),
-            int(feed_forward_size),
-            int(n_layers),
-            float(learning_rate),
+    native_args: list[Any] = [
+        [parameter for parameter in parameters],
+        [list(sequence) for sequence in inputs],
+        [list(sequence) for sequence in targets],
+        int(vocabulary_size),
+        int(context_length),
+        int(d_model),
+        int(n_heads),
+        int(feed_forward_size),
+        int(n_layers),
+        float(learning_rate),
+    ]
+    if target_weights is not None:
+        native_args.append(
+            [list(sequence) for sequence in target_weights]
         )
+
+    return float(
+        _require_cpp().transformer_train_batch(*native_args)
     )
 
 
@@ -267,6 +274,7 @@ def transformer_train_step(
     feed_forward_size: int,
     n_layers: int,
     learning_rate: float,
+    target_weights: Sequence[float] | None = None,
 ) -> float:
     native_parameters = list(parameters)
     native_tokens = list(token_ids)
@@ -277,20 +285,24 @@ def transformer_train_step(
     if not native_tokens:
         raise ValueError("token_ids cannot be empty.")
 
+    native_args: list[Any] = [
+        native_parameters,
+        native_tokens,
+        native_targets,
+        int(vocabulary_size),
+        int(context_length),
+        int(d_model),
+        int(n_heads),
+        int(feed_forward_size),
+        int(n_layers),
+        len(native_tokens),
+        float(learning_rate),
+    ]
+    if target_weights is not None:
+        native_args.append(list(target_weights))
+
     return float(
-        _require_cpp().transformer_train_step(
-            native_parameters,
-            native_tokens,
-            native_targets,
-            int(vocabulary_size),
-            int(context_length),
-            int(d_model),
-            int(n_heads),
-            int(feed_forward_size),
-            int(n_layers),
-            len(native_tokens),
-            float(learning_rate),
-        )
+        _require_cpp().transformer_train_step(*native_args)
     )
 
 
