@@ -40,12 +40,19 @@ class CheckpointTests(unittest.TestCase):
         )
         model.set_response_memory({"مرحبا": "أهلًا بك!"})
 
+        with tempfile.TemporaryDirectory() as memory_directory:
+            memory_path = Path(memory_directory) / "model_with_memory.json"
+            model.save_checkpoint(memory_path)
+            loaded_with_memory = TinyCharacterLanguageModel.load_checkpoint(
+                memory_path
+            )
+
         self.assertEqual(
             loaded.hidden_size,
             model.hidden_size,
         )
         self.assertEqual(
-            loaded.memorized_response("مرحبا"),
+            loaded_with_memory.memorized_response("مرحبا"),
             "أهلًا بك!",
         )
 
