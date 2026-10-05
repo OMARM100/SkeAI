@@ -617,7 +617,7 @@ def main() -> None:
 
     total_seconds = time.perf_counter() - started
     metadata: dict[str, Any] = {
-        "version": 2,
+        "version": 3,
         "model": "level2_transformer",
         "training_backend": "cpp_batch_fused",
         "language_samples": len(language_samples),
@@ -633,6 +633,8 @@ def main() -> None:
         "response_focused_validation_samples": len(
             response_focused_validation_samples
         ),
+        "response_context_weight": 0.25,
+        "response_target_weight": 1.0,
         "dialogue_repeat": args.dialogue_repeat,
         "response_focus_repeat": args.response_focus_repeat,
         "language_training_steps": language_training_steps,
