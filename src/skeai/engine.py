@@ -251,6 +251,7 @@ def transformer_train_batch(
             int(n_heads),
             int(feed_forward_size),
             int(n_layers),
+            len(inputs[0]),
             float(learning_rate),
         )
     )
