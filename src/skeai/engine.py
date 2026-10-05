@@ -73,6 +73,24 @@ def matmul(left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: 
         left, right, int(rows), int(inner), int(right_rows), int(cols)
     )
 
+def causal_softmax(storage: Any, rows: int, cols: int) -> Any:
+    return _require_cpp().causal_softmax(storage, int(rows), int(cols))
+
+
+def softmax_backward(
+    probabilities: Any,
+    gradient: Any,
+    rows: int,
+    cols: int,
+) -> Any:
+    return _require_cpp().softmax_backward(
+        probabilities,
+        gradient,
+        int(rows),
+        int(cols),
+    )
+
+
 
 def transpose(storage: Any, rows: int, cols: int) -> Any:
     return _require_cpp().transpose(storage, int(rows), int(cols))
@@ -219,6 +237,8 @@ __all__ = [
     "scalar_multiply",
     "scalar_divide",
     "matmul",
+    "causal_softmax",
+    "softmax_backward",
     "transpose",
     "dense_forward",
     "dense_indexed_forward",
