@@ -1,9 +1,10 @@
-"""Tiny Transformer language model for SkeAI Level 2.
+"""Medium-sized causal Transformer language model for SkeAI Level 2.
 
-This is the first Level 2 architecture milestone. It keeps the existing
-from-scratch Tensor/C++ backend and adds token embeddings, learned positions,
-causal multi-head self-attention, a feed-forward block, residual connections,
-and language-model logits.
+The model remains fully from-scratch and keeps the native C++ training path,
+but the default configuration is now large enough to learn useful language
+representations and longer conversational context. It uses token embeddings,
+learned positions, causal multi-head self-attention, pre-normalized residual
+blocks, feed-forward layers, and a final language-model projection.
 """
 
 from __future__ import annotations
@@ -21,12 +22,12 @@ from ..tensor import Tensor
 
 @dataclass(frozen=True)
 class TransformerConfig:
-    context_length: int = 64
-    d_model: int = 32
-    n_heads: int = 2
-    feed_forward_size: int = 64
-    n_layers: int = 2
-    max_vocab_size: int = 512
+    context_length: int = 128
+    d_model: int = 128
+    n_heads: int = 4
+    feed_forward_size: int = 512
+    n_layers: int = 4
+    max_vocab_size: int = 2048
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -227,7 +228,7 @@ def _outer_accumulate(
         
 
 class TinyTransformerLM:
-    """Small causal Transformer intended for Level 2 experiments."""
+    """Medium causal Transformer retained under the stable Level 2 class name."""
 
     def __init__(self, vocab_size: int, config: TransformerConfig | None = None) -> None:
         if vocab_size <= 0:
