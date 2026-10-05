@@ -87,7 +87,7 @@ class SkeAILevel2Service:
         *,
         max_new_tokens: int = 48,
         temperature: float = 0.35,
-        top_k: int = 8,
+        top_k: int = 32,\n        repetition_penalty: float = 1.15,\n        no_repeat_ngram_size: int = 3,
     ) -> str:
         if max_new_tokens <= 0 or max_new_tokens > 256:
             raise ValueError("max_new_tokens must be between 1 and 256")
