@@ -86,23 +86,24 @@ class Dense:
         result = self._cached_output._data  # type: ignore[union-attr]
 
         # Reuse the output buffer and compute matrix multiplication directly.
-        # Start from the bias so reset + bias initialization are one pass.
         # The loop order keeps each weight row contiguous.
-        input_range = range(input_size)
-        output_range = range(output_size)
-
         for batch in range(batch_size):
             x_row = x[batch]
             result_row = result[batch]
 
-            for output_index in output_range:
-                result_row[output_index] = b[output_index]
+            # The output buffer is reused across steps, so reset it before
+            # accumulating the new matrix product.
+            for output_index in range(output_size):
+                result_row[output_index] = 0.0
 
-            for input_index in input_range:
+            for input_index in range(input_size):
                 value = x_row[input_index]
                 w_row = w[input_index]
-                for output_index in output_range:
+                for output_index in range(output_size):
                     result_row[output_index] += value * w_row[output_index]
+
+            for output_index in range(output_size):
+                result_row[output_index] += b[output_index]
 
         self._cached_input = inputs
         return self._cached_output
