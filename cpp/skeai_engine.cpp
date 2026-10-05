@@ -3097,36 +3097,23 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             const StorageObject* w1_storage = parameters[base + 4];
             const StorageObject* w2_storage = parameters[base + 5];
 
-            TrainMatrix wq(d, d);
-            TrainMatrix wk(d, d);
-            TrainMatrix wv(d, d);
-            TrainMatrix wo(d, d);
-            TrainMatrix w1(d, ff);
-            TrainMatrix w2(ff, d);
-
-            wq.values.assign(
-                wq_storage->values.begin(),
-                wq_storage->values.end()
+            const TrainMatrixView wq(
+                wq_storage->values.data(), d, d
             );
-            wk.values.assign(
-                wk_storage->values.begin(),
-                wk_storage->values.end()
+            const TrainMatrixView wk(
+                wk_storage->values.data(), d, d
             );
-            wv.values.assign(
-                wv_storage->values.begin(),
-                wv_storage->values.end()
+            const TrainMatrixView wv(
+                wv_storage->values.data(), d, d
             );
-            wo.values.assign(
-                wo_storage->values.begin(),
-                wo_storage->values.end()
+            const TrainMatrixView wo(
+                wo_storage->values.data(), d, d
             );
-            w1.values.assign(
-                w1_storage->values.begin(),
-                w1_storage->values.end()
+            const TrainMatrixView w1(
+                w1_storage->values.data(), d, ff
             );
-            w2.values.assign(
-                w2_storage->values.begin(),
-                w2_storage->values.end()
+            const TrainMatrixView w2(
+                w2_storage->values.data(), ff, d
             );
 
             const TrainLayerCache& cache = caches[layer];
