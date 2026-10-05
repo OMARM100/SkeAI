@@ -137,13 +137,29 @@ It introduces a hybrid token/character tokenizer and a small causal Transformer
 while keeping Level 1 unchanged.
 
 Current Level 2 milestone:
-- Hybrid tokenizer with character fallback
-- Token + positional embeddings
+- Hybrid tokenizer with character fallback and JSON serialization
+- Token + learned positional embeddings
 - 2-head causal self-attention
-- Residual feed-forward blocks
-- Checkpoint save/load
-- Forward-shape and checkpoint tests
-- Standalone benchmark: `python -m benchmarks.benchmark_level2`
+- Pre-LN residual Transformer blocks
+- C++-accelerated MatMul, causal softmax, and softmax backward
+- Full Transformer backward propagation
+- Finite-difference gradient validation
+- Checkpoint save/load and resume training
+- Validation loss, throughput telemetry, and early stopping
+- End-to-end benchmark: `python -m benchmarks.benchmark_level2 --steps 5`
 
-Level 2 training/backpropagation is the next implementation milestone after the
-forward architecture is validated.
+Recommended Level 2 workflow:
+
+    python -m tools.build_cpp
+    python -m unittest discover -s tests -v
+    python -m benchmarks.benchmark_level2 --steps 5
+    python -m training.train_level2
+
+Resume the best Level 2 checkpoint with:
+
+    python -m training.train_level2 --resume
+
+Level 2 is an engineering-complete small Transformer path. Large-scale data,
+batching, KV-cache inference, mixed precision, and retrieval/web knowledge are
+intentionally separate scaling layers rather than part of the core Level 2
+architecture.
