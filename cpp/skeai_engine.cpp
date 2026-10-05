@@ -626,9 +626,9 @@ PyObject* cpp_dense_forward(PyObject*, PyObject* args) {
     PyObject* weights_object = nullptr;
     PyObject* bias_object = nullptr;
     PyObject* output_object = nullptr;
-    Py_ssize_t batch;
-    Py_ssize_t input_size;
-    Py_ssize_t output_size;
+    int batch;
+    int input_size;
+    int output_size;
 
     if (!PyArg_ParseTuple(
         args,
@@ -866,7 +866,7 @@ PyObject* cpp_dense_indexed_forward(PyObject*, PyObject* args) {
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOOonn:dense_indexed_forward",
+        "OOOOiii:dense_indexed_forward",
         &indices_object,
         &weights_object,
         &bias_object,
@@ -1027,7 +1027,7 @@ PyObject* cpp_dense_indexed_backward(PyObject*, PyObject* args) {
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOOonn:dense_indexed_backward",
+        "OOOOiii:dense_indexed_backward",
         &indices_object,
         &grad_output_object,
         &grad_weights_object,
