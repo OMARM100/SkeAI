@@ -164,7 +164,7 @@ This architecture is a future direction. The current release does not yet contro
 
 ## Performance direction
 
-The performance engine is being improved before the model is made larger.
+The performance engine is being improved before the model is made larger. The Python implementation remains the reference/fallback path, while expensive numerical kernels are isolated behind `src/skeai/engine.py`. This gives the project one execution boundary instead of scattering performance-specific fixes across individual layers.
 
 Current hot-path improvements include:
 
@@ -173,8 +173,17 @@ Current hot-path improvements include:
 3. In-place SGD parameter updates.
 4. Reusing the cross-entropy gradient instead of rebuilding it during backward.
 5. Runtime timing telemetry for the training stages.
+6. A from-scratch native C backend for matrix multiplication and Dense forward/backward kernels.
 
-The next performance goal is to reduce allocation and Python-loop overhead further while keeping the implementation understandable. After that, we can consider larger contexts, better datasets, a small Transformer, and optimized/native backends.
+Build the native backend from the repository root with:
+
+```bash
+python -m tools.build_native
+```
+
+The native module is optional. When it is not built, SkeAI automatically uses the Python reference implementation. The project does not depend on PyTorch, TensorFlow, NumPy, or another ML framework.
+
+The performance rule is now structural: optimize at the engine boundary, measure the complete training step, and reject changes that improve an isolated function while making the end-to-end workload slower.
 
 ## Development roadmap
 
