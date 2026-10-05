@@ -11,18 +11,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from src.skeai.level2.generation import generate_text
+from src.skeai.level2.chat import SkeAIConversation
 from src.skeai.level2.tokenizer import HybridTokenizer
 from src.skeai.level2.transformer import TinyTransformerLM
+
 
 UI_DIR = Path(__file__).resolve().parent
 ROOT = UI_DIR.parent
 DEFAULT_CHECKPOINT = ROOT / "models" / "level2_transformer.json"
 DEFAULT_TOKENIZER = ROOT / "models" / "level2_tokenizer.json"
+DEFAULT_MEMORY = ROOT / "models" / "conversation_memory.json"
 
 
 class SkeAILevel2Service:
-    def __init__(self, checkpoint: Path, tokenizer_path: Path) -> None:
+    def __init__(
+        self,
+        checkpoint: Path,
+        tokenizer_path: Path,
+        memory_path: Path,
+    ) -> None:
         if not checkpoint.exists():
             raise FileNotFoundError(
                 f"Level 2 checkpoint not found: {checkpoint}\n"
@@ -36,6 +43,7 @@ class SkeAILevel2Service:
 
         self.checkpoint = checkpoint
         self.tokenizer_path = tokenizer_path
+        self.memory_path = memory_path
         self.model = TinyTransformerLM.load_checkpoint(checkpoint)
         self.tokenizer = HybridTokenizer.load(tokenizer_path)
 
@@ -44,6 +52,12 @@ class SkeAILevel2Service:
                 "Checkpoint and tokenizer vocabulary sizes do not match."
             )
 
+        self.conversation = SkeAIConversation(
+            self.model,
+            self.tokenizer,
+            memory_path=memory_path,
+            max_history_turns=3,
+        )
         self.lock = threading.Lock()
 
     def status(self) -> dict[str, Any]:
@@ -51,26 +65,26 @@ class SkeAILevel2Service:
             "ok": True,
             "model_type": "level2_transformer",
             "checkpoint": str(self.checkpoint),
+            "tokenizer": str(self.tokenizer_path),
+            "memory": str(self.memory_path),
             "vocabulary_size": self.tokenizer.vocab_size,
             "context_length": self.model.config.context_length,
             "d_model": self.model.config.d_model,
             "heads": self.model.config.n_heads,
             "layers": self.model.config.n_layers,
             "parameter_count": self.model.parameter_count(),
+            "conversation_turns": len(self.conversation.memory.turns),
+            "remembered_facts": self.conversation.memory.facts,
         }
 
     def chat(
         self,
         message: str,
         *,
-        max_new_tokens: int = 64,
-        temperature: float = 0.85,
-        top_k: int = 0,
+        max_new_tokens: int = 48,
+        temperature: float = 0.35,
+        top_k: int = 8,
     ) -> str:
-        if not isinstance(message, str):
-            raise TypeError("message must be a string")
-        if not message.strip():
-            raise ValueError("message cannot be empty")
         if max_new_tokens <= 0 or max_new_tokens > 256:
             raise ValueError("max_new_tokens must be between 1 and 256")
         if temperature < 0.0 or temperature > 2.0:
@@ -79,14 +93,18 @@ class SkeAILevel2Service:
             raise ValueError("top_k must be between 0 and the vocabulary size")
 
         with self.lock:
-            return generate_text(
-                self.model,
-                self.tokenizer,
+            return self.conversation.chat(
                 message,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_k=top_k,
                 seed=1234,
+            )
+
+    def reset_conversation(self, *, clear_memory: bool = False) -> None:
+        with self.lock:
+            self.conversation.reset(
+                clear_persistent_memory=clear_memory,
             )
 
 
@@ -141,27 +159,39 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/chat":
-            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+        if self.path == "/api/chat":
+            try:
+                assert self.service is not None
+                payload = self._read_json()
+                response = self.service.chat(
+                    payload.get("message", ""),
+                    max_new_tokens=int(payload.get("max_new_tokens", 48)),
+                    temperature=float(payload.get("temperature", 0.35)),
+                    top_k=int(payload.get("top_k", 8)),
+                )
+                self._send_json({"response": response})
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # pragma: no cover
+                self._send_json(
+                    {"error": str(exc)},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             return
 
-        try:
-            assert self.service is not None
-            payload = self._read_json()
-            response = self.service.chat(
-                payload.get("message", ""),
-                max_new_tokens=int(payload.get("max_new_tokens", 64)),
-                temperature=float(payload.get("temperature", 0.85)),
-                top_k=int(payload.get("top_k", 0)),
-            )
-            self._send_json({"response": response})
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-        except Exception as exc:  # pragma: no cover
-            self._send_json(
-                {"error": str(exc)},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+        if self.path == "/api/reset":
+            try:
+                assert self.service is not None
+                payload = self._read_json()
+                self.service.reset_conversation(
+                    clear_memory=bool(payload.get("clear_memory", False)),
+                )
+                self._send_json({"ok": True})
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def _send_file(self, filename: str, content_type: str) -> None:
         path = UI_DIR / filename
@@ -210,11 +240,22 @@ def main() -> None:
             )
         ),
     )
+    parser.add_argument(
+        "--memory",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "SKEAI_MEMORY",
+                str(DEFAULT_MEMORY),
+            )
+        ),
+    )
     args = parser.parse_args()
 
     service = SkeAILevel2Service(
         args.checkpoint.resolve(),
         args.tokenizer.resolve(),
+        args.memory.resolve(),
     )
     RequestHandler.service = service
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
@@ -222,6 +263,7 @@ def main() -> None:
     print(f"SkeAI Level 2 UI: http://{args.host}:{args.port}")
     print(f"Checkpoint: {service.checkpoint}")
     print(f"Tokenizer: {service.tokenizer_path}")
+    print(f"Memory: {service.memory_path}")
 
     try:
         server.serve_forever()
