@@ -48,42 +48,67 @@ def make_samples(
     return samples
 
 
-def load_dialogue_pairs(path: Path) -> list[tuple[str, str]]:
+def load_dialogue_pairs(path: Path) -> list[list[tuple[str, str]]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError("Dialogue corpus must contain a JSON list.")
 
-    pairs: list[tuple[str, str]] = []
+    conversations: list[list[tuple[str, str]]] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
+        turns = item.get("turns")
+        if isinstance(turns, list):
+            conversation: list[tuple[str, str]] = []
+            pending_user: str | None = None
+            for turn in turns:
+                if not isinstance(turn, dict):
+                    continue
+                role = str(turn.get("role", "")).lower()
+                text = turn.get("text")
+                if not isinstance(text, str):
+                    continue
+                text = " ".join(text.strip().split())
+                if not text:
+                    continue
+                if role == "user":
+                    pending_user = text
+                elif role == "assistant" and pending_user is not None:
+                    conversation.append((pending_user, text))
+                    pending_user = None
+            if conversation:
+                conversations.append(conversation)
+            continue
+
         user = item.get("input")
         response = item.get("response")
         if isinstance(user, str) and isinstance(response, str):
             user = " ".join(user.strip().split())
             response = " ".join(response.strip().split())
             if user and response:
-                pairs.append((user, response))
+                conversations.append([(user, response)])
 
-    if not pairs:
-        raise ValueError("Dialogue corpus does not contain valid input/response pairs.")
-    return pairs
+    if not conversations:
+        raise ValueError("Dialogue corpus does not contain valid conversations.")
+    return conversations
 
 
-def format_dialogue(user: str, response: str) -> str:
-    # The explicit roles teach the model that the text after SkeAI: is a
-    # response, instead of merely another continuation of the corpus.
-    return f"{USER_LABEL} {user}\n{ASSISTANT_LABEL} {response}"
+def format_dialogue(conversation: list[tuple[str, str]]) -> str:
+    # Multi-turn sequences teach state tracking instead of isolated Q&A.
+    return "\n".join(
+        f"{USER_LABEL} {user}\n{ASSISTANT_LABEL} {response}"
+        for user, response in conversation
+    )
 
 
 def build_dialogue_samples(
-    pairs: list[tuple[str, str]],
+    conversations: list[list[tuple[str, str]]],
     tokenizer: HybridTokenizer,
     context_length: int,
 ) -> list[tuple[list[int], list[int]]]:
     samples: list[tuple[list[int], list[int]]] = []
-    for user, response in pairs:
-        text = format_dialogue(user, response)
+    for conversation in conversations:
+        text = format_dialogue(conversation)
         tokens = tokenizer.encode(text, add_bos=True, add_eos=True)
         samples.extend(
             make_samples(
@@ -157,8 +182,8 @@ def main() -> None:
 
     train_text = TRAIN_CORPUS.read_text(encoding="utf-8")
     validation_text = VALIDATION_CORPUS.read_text(encoding="utf-8")
-    dialogue_pairs = load_dialogue_pairs(DIALOGUE_JSON)
-    dialogue_texts = [format_dialogue(user, response) for user, response in dialogue_pairs]
+    dialogue_conversations = load_dialogue_pairs(DIALOGUE_JSON)
+    dialogue_texts = [format_dialogue(conversation) for conversation in dialogue_conversations]
 
     tokenizer = build_tokenizer(
         train_text,
@@ -209,7 +234,7 @@ def main() -> None:
         stride=max(1, context_length // 2),
     )
     dialogue_samples = build_dialogue_samples(
-        dialogue_pairs,
+        dialogue_conversations,
         tokenizer,
         context_length,
     )
@@ -244,7 +269,8 @@ def main() -> None:
     print(f"resume={args.resume}")
     print(f"vocabulary_size={tokenizer.vocab_size}")
     print(f"language_samples={len(language_samples)}")
-    print(f"dialogue_pairs={len(dialogue_pairs)}")
+    print(f"dialogue_conversations={len(dialogue_conversations)}")
+    print(f"dialogue_pairs={sum(len(c) for c in dialogue_conversations)}")
     print(f"dialogue_samples={len(dialogue_samples)}")
     print(f"dialogue_repeat={args.dialogue_repeat}")
     print(f"training_pool={len(training_pool)}")
@@ -327,7 +353,8 @@ def main() -> None:
         "model": "level2_transformer",
         "training_backend": "cpp_batch_fused",
         "language_samples": len(language_samples),
-        "dialogue_pairs": len(dialogue_pairs),
+        "dialogue_conversations": len(dialogue_conversations),
+        "dialogue_pairs": sum(len(c) for c in dialogue_conversations),
         "dialogue_samples": len(dialogue_samples),
         "dialogue_repeat": args.dialogue_repeat,
         "training_pool": len(training_pool),
