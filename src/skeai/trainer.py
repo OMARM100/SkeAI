@@ -114,10 +114,17 @@ class Trainer:
         total_loss = 0.0
         total_examples = 0
 
-        for inputs, targets in batches:
+        for batch in batches:
+            if isinstance(batch, IndexedBatch):
+                inputs = batch
+                targets = batch.targets
+                batch_examples = batch.batch_size
+            else:
+                inputs, targets = batch
+                batch_examples = inputs.shape[0]
+
             logits = self._forward_batch(inputs)
             batch_loss = self.loss.forward(logits, targets)
-            batch_examples = inputs.shape[0]
             total_loss += batch_loss * batch_examples
             total_examples += batch_examples
 
@@ -157,10 +164,18 @@ class Trainer:
                 rng.shuffle(order)
 
             for batch_number, batch_index in enumerate(order, start=1):
-                inputs, targets = batch_list[batch_index]
+                batch = batch_list[batch_index]
+
+                if isinstance(batch, IndexedBatch):
+                    inputs = batch
+                    targets = batch.targets
+                    batch_examples = batch.batch_size
+                else:
+                    inputs, targets = batch
+                    batch_examples = inputs.shape[0]
+
                 loss_value = self.train_step(inputs, targets)
 
-                batch_examples = inputs.shape[0]
                 epoch_loss_total += loss_value * batch_examples
                 epoch_examples += batch_examples
 
