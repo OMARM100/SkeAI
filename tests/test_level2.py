@@ -271,6 +271,54 @@ class Level2TransformerTests(unittest.TestCase):
                 parameter_batch.to_list(),
             )
 
+    def test_native_weight_decay_matches_sgd_reference(self) -> None:
+        config = TransformerConfig(
+            context_length=6,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=16,
+            n_layers=1,
+            max_vocab_size=16,
+            seed=17,
+        )
+        inputs = [1, 2, 3, 4, 5, 1]
+        targets = [2, 3, 4, 5, 1, 2]
+        learning_rate = 0.01
+        weight_decay = 0.02
+
+        model_native = TinyTransformerLM(vocab_size=8, config=config)
+        model_reference = TinyTransformerLM(vocab_size=8, config=config)
+
+        trainer_native = Level2Trainer(
+            model=model_native,
+            optimizer=SGD(
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+            ),
+        )
+
+        loss = CrossEntropyLoss()
+        logits = model_reference.forward(inputs)
+        reference_loss = loss.forward(logits, targets)
+        gradients = model_reference.backward(loss.backward())
+        SGD(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        ).step(model_reference.parameters(), gradients)
+
+        native_loss = trainer_native.train_step(inputs, targets)
+
+        self.assertAlmostEqual(native_loss, reference_loss, places=10)
+
+        for parameter_native, parameter_reference in zip(
+            model_native.parameters().values(),
+            model_reference.parameters().values(),
+        ):
+            self.assertEqual(
+                parameter_native.to_list(),
+                parameter_reference.to_list(),
+            )
+
     def test_attention_training_reduces_loss(self) -> None:
         config = TransformerConfig(
             context_length=6,
