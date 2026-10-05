@@ -558,6 +558,65 @@ class TinyTransformerLM:
 
         return grads
 
+    def generate(
+        self,
+        token_ids: list[int],
+        *,
+        max_new_tokens: int = 32,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        seed: int | None = None,
+        eos_token_id: int | None = None,
+    ) -> list[int]:
+        """Generate token IDs autoregressively from an existing token prefix."""
+        if not token_ids:
+            raise ValueError("token_ids cannot be empty.")
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens cannot be negative.")
+        if temperature < 0.0:
+            raise ValueError("temperature cannot be negative.")
+        if top_k < 0:
+            raise ValueError("top_k cannot be negative.")
+        if eos_token_id is not None and not 0 <= eos_token_id < self.vocab_size:
+            raise ValueError("eos_token_id is out of range.")
+
+        generated = list(token_ids)
+        if any(token_id < 0 or token_id >= self.vocab_size for token_id in generated):
+            raise ValueError("Token ID out of range.")
+
+        rng = random.Random(seed)
+
+        for _ in range(max_new_tokens):
+            logits = self.next_logits(generated)
+            if temperature == 0.0:
+                next_token = max(
+                    range(self.vocab_size),
+                    key=lambda index: logits[index],
+                )
+            else:
+                scale = 1.0 / temperature
+                candidates = list(range(self.vocab_size))
+                if top_k:
+                    candidates = sorted(
+                        candidates,
+                        key=lambda index: logits[index],
+                        reverse=True,
+                    )[:min(top_k, self.vocab_size)]
+
+                maximum = max(logits[index] * scale for index in candidates)
+                weights = [
+                    math.exp(logits[index] * scale - maximum)
+                    for index in candidates
+                ]
+                next_token = rng.choices(candidates, weights=weights, k=1)[0]
+
+            generated.append(next_token)
+
+            if eos_token_id is not None and next_token == eos_token_id:
+                break
+
+        return generated
+
     def parameter_count(self) -> int:
         total = self.token_embedding.size + self.position_embedding.size
         total += self.lm_head.size
