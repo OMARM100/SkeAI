@@ -179,6 +179,7 @@ def main() -> None:
     print(f"feed_forward={model.config.feed_forward_size}")
     print(f"learning_rate={args.learning_rate}")
     print(f"patience={args.patience}")
+    print("training_backend=cpp_fused")
     print("attention_backend=cpp")
     print("matrix_backend=cpp")
 
