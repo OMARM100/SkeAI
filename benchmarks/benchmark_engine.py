@@ -376,16 +376,19 @@ def main() -> None:
         dense1.weights.shape[1],
         scale=0.001,
     )
-    dense1_parts = profile_dense_parts(
-        dense1,
-        inputs,
-        dense1_grad_output,
-        repeats=5,
-    )
+    if BACKEND_NAME == "python":
+        dense1_parts = profile_dense_parts(
+            dense1,
+            inputs,
+            dense1_grad_output,
+            repeats=5,
+        )
 
-    print("=== Dense #1 Internal Profile ===")
-    for key, value in dense1_parts.items():
-        print(f"{key}={value:.3f}ms")
+        print("=== Dense #1 Python Internal Profile ===")
+        for key, value in dense1_parts.items():
+            print(f"{key}={value:.3f}ms")
+    else:
+        print("dense1_internal_profile=covered_by_native_kernels")
 
     print(f"model_parameters={model.network.parameter_count()}")
 
