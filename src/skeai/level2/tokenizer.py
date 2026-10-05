@@ -98,11 +98,16 @@ class HybridTokenizer:
 
         seen = set(self.id_to_token)
         added = 0
+        available_slots = max_units - len(self.id_to_token)
+        if available_slots < 0:
+            raise ValueError(
+                "max_units must be at least the number of existing vocabulary tokens."
+            )
 
         for token in character_candidates:
             if token in seen:
                 continue
-            if added >= max_units:
+            if added >= available_slots:
                 break
             self.id_to_token.append(token)
             self.token_to_id[token] = len(self.id_to_token) - 1
@@ -112,7 +117,7 @@ class HybridTokenizer:
         for token in unit_candidates:
             if token in seen:
                 continue
-            if added >= max_units:
+            if added >= available_slots:
                 break
             self.id_to_token.append(token)
             self.token_to_id[token] = len(self.id_to_token) - 1
