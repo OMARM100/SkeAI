@@ -2619,7 +2619,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
 
     if (parameters[0]->values.size() != token_parameter_count ||
         parameters[1]->values.size() != position_parameter_count ||
-        parameters[expected_parameters - 1]->values.size() != lm_parameter_count) {
+        parameters[2]->values.size() != lm_parameter_count) {
         Py_DECREF(parameters_sequence);
         PyErr_SetString(
             PyExc_ValueError,
@@ -2629,7 +2629,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     }
 
     for (std::size_t layer = 0; layer < layers; ++layer) {
-        const std::size_t base = 2 + layer * 6;
+        const std::size_t base = 3 + layer * 6;
         if (parameters[base + 0]->values.size() != qkv_parameter_count ||
             parameters[base + 1]->values.size() != qkv_parameter_count ||
             parameters[base + 2]->values.size() != qkv_parameter_count ||
@@ -2796,9 +2796,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         );
 
         TrainMatrix lm_head(d, vocab);
-        lm_head.values = parameters[
-            expected_parameters - 1
-        ]->values;
+        lm_head.values = parameters[2]->values;
 
         TrainMatrix logits =
             train_matmul(final_norm, lm_head);
@@ -2875,9 +2873,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             train_matmul(final_norm_transpose, dlogits);
 
         train_accumulate_parameter_gradient(
-            parameter_gradients[
-                expected_parameters - 1
-            ],
+            parameter_gradients[2],
             grad_lm_head,
             1.0
         );
