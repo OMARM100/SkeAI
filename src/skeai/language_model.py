@@ -7,6 +7,8 @@ import math
 import random
 import re
 import unicodedata
+from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, List
 
@@ -108,7 +110,71 @@ class TinyCharacterLanguageModel:
         key = self.normalize_prompt(prompt)
         if not key:
             return None
-        return self.response_memory.get(key)
+
+        exact = self.response_memory.get(key)
+        if exact is not None:
+            return exact
+
+        # Small fuzzy lookup for natural variations such as:
+        # "ما اسمك" vs "ما هو اسمك"
+        # "كيف حالك" vs "كيف حالك ؟"
+        if len(key) < 4 or not self.response_memory:
+            return None
+
+        key_tokens = set(key.split())
+        best_response: str | None = None
+        best_score = 0.0
+
+        for candidate, response in self.response_memory.items():
+            candidate_tokens = set(candidate.split())
+            if not candidate_tokens:
+                continue
+
+            character_score = SequenceMatcher(
+                None,
+                key,
+                candidate,
+            ).ratio()
+
+            union = key_tokens | candidate_tokens
+            overlap = key_tokens & candidate_tokens
+            token_score = len(overlap) / len(union) if union else 0.0
+
+            score = 0.72 * character_score + 0.28 * token_score
+            if score > best_score:
+                best_score = score
+                best_response = response
+
+        if best_score >= 0.82:
+            return best_response
+        return None
+
+    def _dynamic_response(self, prompt: str) -> str | None:
+        """Handle deterministic facts that should never become stale."""
+        key = self.normalize_prompt(prompt)
+
+        time_queries = {
+            "كم الساعة",
+            "كم الساعه",
+            "الساعة كام",
+            "الساعه كام",
+            "الوقت كام",
+            "الوقت الآن",
+            "الوقت الان",
+        }
+        if key in time_queries:
+            return f"الساعة الآن {datetime.now().strftime('%H:%M')}."
+
+        date_queries = {
+            "ما التاريخ اليوم",
+            "ما تاريخ اليوم",
+            "تاريخ اليوم",
+            "التاريخ اليوم",
+        }
+        if key in date_queries:
+            return f"تاريخ اليوم هو {datetime.now().strftime('%Y-%m-%d')}."
+
+        return None
 
     def respond(
         self,
@@ -118,7 +184,11 @@ class TinyCharacterLanguageModel:
         temperature: float = 0.65,
         seed: int | None = 1234,
     ) -> str:
-        """Return a memorized response when available, otherwise generate."""
+        """Return a grounded response when available, otherwise generate."""
+        dynamic = self._dynamic_response(prompt)
+        if dynamic is not None:
+            return dynamic
+
         memorized = self.memorized_response(prompt)
         if memorized is not None:
             return memorized
