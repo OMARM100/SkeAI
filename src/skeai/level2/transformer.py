@@ -125,14 +125,6 @@ def _relu_backward(dy: list[list[float]], x: list[list[float]]) -> list[list[flo
     ]
 
 
-def _linear_backward(
-    x: list[list[float]],
-    dy: list[list[float]],
-) -> tuple[list[list[float]], list[list[float]]]:
-    dx = _matmul(dy, _transpose(_identity_weight_shape(x, dy)))
-    raise RuntimeError("internal helper should not be called")
-
-
 def _layer_norm_forward(
     values: list[list[float]],
     eps: float = 1e-5,
