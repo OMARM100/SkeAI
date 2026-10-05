@@ -73,6 +73,7 @@ def main() -> None:
     print(f"forward_ms={forward_ms:.3f}")
     print(f"forward_backward_ms={backward_ms:.3f}")
     print(f"train_step_ms={train_step_ms:.3f}")
+    print("training_backend=cpp_fused")
     print("attention_backend=cpp")
     print("matrix_backend=cpp")
     print("softmax_backend=cpp")
