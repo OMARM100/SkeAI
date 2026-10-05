@@ -34,6 +34,14 @@ class TinyLanguageModelTests(unittest.TestCase):
     def test_memorized_response_normalizes_prompt(self) -> None:
         self.model.set_response_memory({"كيف حالك؟": "أنا بخير."})
         self.assertEqual(self.model.respond("  كيف حالك ؟ "), "أنا بخير.")
+    def test_fuzzy_memorized_response(self) -> None:
+        self.model.set_response_memory({"ما اسمك": "اسمي SkeAI."})
+        self.assertEqual(self.model.respond("ما هو اسمك"), "اسمي SkeAI.")
+
+    def test_dynamic_time_response(self) -> None:
+        response = self.model.respond("كم الساعة")
+        self.assertRegex(response, r"^الساعة الآن \\d{2}:\\d{2}\\.$")
+
     def test_invalid_generation_controls(self) -> None:
         with self.assertRaises(ValueError):
             self.model.generate("hello", top_k=0)
