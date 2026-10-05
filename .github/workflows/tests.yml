@@ -1,5 +1,9 @@
 name: SkeAI Tests
 
+concurrency:
+  group: cpp-training-baseline
+  cancel-in-progress: true
+
 on:
   push:
     branches: ["main", "perf/baseline-cpp-training-ci"]
