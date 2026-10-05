@@ -193,7 +193,19 @@ def main() -> None:
 
     train_text = TRAIN_CORPUS.read_text(encoding="utf-8")
     validation_text = VALIDATION_CORPUS.read_text(encoding="utf-8")
-    dialogue_conversations = load_dialogue_pairs(DIALOGUE_JSON)
+    all_dialogue_conversations = load_dialogue_pairs(DIALOGUE_JSON)
+
+    # Hold out complete conversations. This prevents the validation metric from
+    # rewarding memorization of the exact dialogue pairs used for training.
+    split_rng = random.Random(args.seed)
+    shuffled_dialogues = list(all_dialogue_conversations)
+    split_rng.shuffle(shuffled_dialogues)
+    validation_dialogue_count = max(1, len(shuffled_dialogues) // 5)
+    validation_dialogues = shuffled_dialogues[:validation_dialogue_count]
+    dialogue_conversations = shuffled_dialogues[validation_dialogue_count:]
+    if not dialogue_conversations:
+        raise ValueError("Dialogue corpus must contain at least two conversations.")
+
     dialogue_texts = [
         format_dialogue(conversation, include_self_context=True)
         for conversation in dialogue_conversations
@@ -257,8 +269,18 @@ def main() -> None:
         context_length,
         stride=context_length,
     )
+    dialogue_validation_samples = build_dialogue_samples(
+        validation_dialogues,
+        tokenizer,
+        context_length,
+    )
 
-    if not language_samples or not dialogue_samples or not validation_samples:
+    if (
+        not language_samples
+        or not dialogue_samples
+        or not validation_samples
+        or not dialogue_validation_samples
+    ):
         raise ValueError("One of the training or validation corpora is too short.")
 
     # Dialogue examples are deliberately oversampled. This is the first
@@ -284,8 +306,10 @@ def main() -> None:
     print(f"vocabulary_size={tokenizer.vocab_size}")
     print(f"language_samples={len(language_samples)}")
     print(f"dialogue_conversations={len(dialogue_conversations)}")
+    print(f"dialogue_validation_conversations={len(validation_dialogues)}")
     print(f"dialogue_pairs={sum(len(c) for c in dialogue_conversations)}")
     print(f"dialogue_samples={len(dialogue_samples)}")
+    print(f"dialogue_validation_samples={len(dialogue_validation_samples)}")
     print(f"dialogue_repeat={args.dialogue_repeat}")
     print(f"training_pool={len(training_pool)}")
     print(f"validation_samples={len(validation_samples)}")
@@ -320,16 +344,35 @@ def main() -> None:
         )
         completed_steps += steps_this_epoch
 
-        validation_loss_total = 0.0
-        validation_count = 0
+        language_validation_total = 0.0
+        language_validation_count = 0
         for index in range(
             min(args.max_validation_steps, len(validation_samples))
         ):
             inputs, targets = validation_samples[index]
-            validation_loss_total += trainer.evaluate(inputs, targets)
-            validation_count += 1
+            language_validation_total += trainer.evaluate(inputs, targets)
+            language_validation_count += 1
 
-        validation_loss = validation_loss_total / max(validation_count, 1)
+        dialogue_validation_total = 0.0
+        dialogue_validation_count = 0
+        for index in range(
+            min(args.max_validation_steps, len(dialogue_validation_samples))
+        ):
+            inputs, targets = dialogue_validation_samples[index]
+            dialogue_validation_total += trainer.evaluate(inputs, targets)
+            dialogue_validation_count += 1
+
+        language_validation_loss = (
+            language_validation_total / max(language_validation_count, 1)
+        )
+        dialogue_validation_loss = (
+            dialogue_validation_total / max(dialogue_validation_count, 1)
+        )
+        # Equal weighting keeps generic language quality from hiding a
+        # regression in actual conversation behavior.
+        validation_loss = (
+            language_validation_loss + dialogue_validation_loss
+        ) / 2.0
         epoch_seconds = time.perf_counter() - epoch_start
         steps_per_second = steps_this_epoch / max(epoch_seconds, 1e-9)
 
@@ -348,6 +391,8 @@ def main() -> None:
             f"epoch={epoch} "
             f"train_loss={train_loss:.6f} "
             f"validation_loss={validation_loss:.6f} "
+            f"language_validation_loss={language_validation_loss:.6f} "
+            f"dialogue_validation_loss={dialogue_validation_loss:.6f} "
             f"steps={steps_this_epoch} "
             f"epoch_seconds={epoch_seconds:.3f} "
             f"steps_per_second={steps_per_second:.3f} "
@@ -368,8 +413,12 @@ def main() -> None:
         "training_backend": "cpp_batch_fused",
         "language_samples": len(language_samples),
         "dialogue_conversations": len(dialogue_conversations),
+        "dialogue_validation_conversations": len(validation_dialogues),
         "dialogue_pairs": sum(len(c) for c in dialogue_conversations),
         "dialogue_samples": len(dialogue_samples),
+        "dialogue_validation_samples": len(dialogue_validation_samples),
+        "language_validation_loss": language_validation_loss,
+        "dialogue_validation_loss": dialogue_validation_loss,
         "dialogue_repeat": args.dialogue_repeat,
         "training_pool": len(training_pool),
         "completed_steps": completed_steps,
