@@ -1,7 +1,8 @@
-"""Training loop and performance telemetry for SkeAI 0.3."""
+"""Training loop and performance telemetry for SkeAI 0.4."""
 
 from __future__ import annotations
 
+import random
 from time import perf_counter
 from typing import Callable, Dict, List, Sequence
 
@@ -12,11 +13,7 @@ from .tensor import Tensor
 
 
 class Trainer:
-    """Train a Sequential model with cross-entropy and SGD.
-
-    Optional timing telemetry measures the hot stages without changing the
-    public train_step return value.
-    """
+    """Train a Sequential model with cross-entropy and SGD."""
 
     def __init__(
         self,
@@ -30,175 +27,103 @@ class Trainer:
         self.optimizer = optimizer
         self.loss = loss or CrossEntropyLoss()
         self.enable_timing = enable_timing
-
-        # Cache these mappings once. Rebuilding parameter/gradient dictionaries
-        # every train step adds avoidable Python overhead.
         self._parameters = model.parameters()
         self._gradients = model.gradients()
+        self.last_step_timing: Dict[str, float] = {k: 0.0 for k in ("forward_ms","loss_ms","backward_ms","optimizer_ms","total_ms")}
+        self.last_epoch_timing: Dict[str, float] = {k: 0.0 for k in ("seconds","batches","examples","examples_per_second","average_step_ms")}
 
-        self.last_step_timing: Dict[str, float] = {
-            "forward_ms": 0.0,
-            "loss_ms": 0.0,
-            "backward_ms": 0.0,
-            "optimizer_ms": 0.0,
-            "total_ms": 0.0,
-        }
-        self.last_epoch_timing: Dict[str, float] = {
-            "seconds": 0.0,
-            "batches": 0.0,
-            "examples": 0.0,
-            "examples_per_second": 0.0,
-            "average_step_ms": 0.0,
-        }
-
-    def train_step(
-        self,
-        inputs: Tensor,
-        targets: Sequence[int],
-    ) -> float:
+    def train_step(self, inputs: Tensor, targets: Sequence[int]) -> float:
         total_start = perf_counter()
-
         if self.enable_timing:
             stage_start = perf_counter()
-
         logits = self.model.forward(inputs)
-
         if self.enable_timing:
             forward_ms = (perf_counter() - stage_start) * 1000.0
             stage_start = perf_counter()
         else:
             forward_ms = 0.0
-
         loss_value = self.loss.forward(logits, targets)
-
         if self.enable_timing:
             loss_ms = (perf_counter() - stage_start) * 1000.0
             stage_start = perf_counter()
         else:
             loss_ms = 0.0
-
         gradient = self.loss.backward()
         self.model.backward(gradient, compute_input_gradient=False)
-
         if self.enable_timing:
             backward_ms = (perf_counter() - stage_start) * 1000.0
             stage_start = perf_counter()
         else:
             backward_ms = 0.0
-
         self.optimizer.step(self._parameters, self._gradients)
-
         total_ms = (perf_counter() - total_start) * 1000.0
-
         if self.enable_timing:
             optimizer_ms = (perf_counter() - stage_start) * 1000.0
-            self.last_step_timing = {
-                "forward_ms": forward_ms,
-                "loss_ms": loss_ms,
-                "backward_ms": backward_ms,
-                "optimizer_ms": optimizer_ms,
-                "total_ms": total_ms,
-            }
-
+            self.last_step_timing = {"forward_ms":forward_ms,"loss_ms":loss_ms,"backward_ms":backward_ms,"optimizer_ms":optimizer_ms,"total_ms":total_ms}
         return loss_value
 
     def evaluate_batches(self, batches) -> float:
-        """Evaluate the model on batches without updating parameters."""
+        """Evaluate without updating model parameters."""
         losses: List[float] = []
-
         for inputs, targets in batches:
             logits = self.model.forward(inputs)
             losses.append(self.loss.forward(logits, targets))
-
         if not losses:
             raise ValueError("Evaluation batches cannot be empty.")
-
         return sum(losses) / len(losses)
+
     def train_batches(
         self,
         batches,
         epochs: int,
         *,
         callback: Callable[[int, int, float], None] | None = None,
-        epoch_callback: Callable[[int, float, float, float], None] | None = None,
+        epoch_callback: Callable[[int, float, float, float], bool | None] | None = None,
+        shuffle: bool = True,
+        seed: int = 1234,
     ) -> List[float]:
-        """Train repeatedly over an iterable of (inputs, targets) batches.
-
-        epoch_callback receives:
-            epoch, average_loss, elapsed_seconds, examples_per_second
-        """
+        """Train batches in a different order each epoch and allow early stop."""
         if epochs <= 0:
             raise ValueError("epochs must be greater than zero.")
-
+        batch_list = list(batches)
+        if not batch_list:
+            raise ValueError("Training batches cannot be empty.")
         history: List[float] = []
-
+        rng = random.Random(seed)
+        order = list(range(len(batch_list)))
         for epoch in range(1, epochs + 1):
             epoch_start = perf_counter()
             epoch_losses: List[float] = []
             epoch_examples = 0
-
-            for batch_index, (inputs, targets) in enumerate(batches, start=1):
+            if shuffle:
+                rng.shuffle(order)
+            for batch_number, batch_index in enumerate(order, start=1):
+                inputs, targets = batch_list[batch_index]
                 loss_value = self.train_step(inputs, targets)
                 epoch_losses.append(loss_value)
                 epoch_examples += inputs.shape[0]
-
                 if callback is not None:
-                    callback(epoch, batch_index, loss_value)
-
-            if not epoch_losses:
-                raise ValueError("Training batches cannot be empty.")
-
+                    callback(epoch, batch_number, loss_value)
             elapsed = perf_counter() - epoch_start
             average_loss = sum(epoch_losses) / len(epoch_losses)
-            examples_per_second = (
-                epoch_examples / elapsed if elapsed > 0.0 else 0.0
-            )
-            average_step_ms = (
-                elapsed * 1000.0 / len(epoch_losses)
-                if epoch_losses
-                else 0.0
-            )
-
-            self.last_epoch_timing = {
-                "seconds": elapsed,
-                "batches": float(len(epoch_losses)),
-                "examples": float(epoch_examples),
-                "examples_per_second": examples_per_second,
-                "average_step_ms": average_step_ms,
-            }
-
+            examples_per_second = epoch_examples / elapsed if elapsed > 0.0 else 0.0
+            average_step_ms = elapsed * 1000.0 / len(epoch_losses)
+            self.last_epoch_timing = {"seconds":elapsed,"batches":float(len(epoch_losses)),"examples":float(epoch_examples),"examples_per_second":examples_per_second,"average_step_ms":average_step_ms}
             history.append(average_loss)
-
-            if epoch_callback is not None:
-                epoch_callback(
-                    epoch,
-                    average_loss,
-                    elapsed,
-                    examples_per_second,
-                )
-
+            should_stop = bool(epoch_callback(epoch, average_loss, elapsed, examples_per_second)) if epoch_callback is not None else False
+            if should_stop:
+                break
         return history
 
-    def train(
-        self,
-        inputs: Tensor,
-        targets: Sequence[int],
-        epochs: int,
-        *,
-        callback: Callable[[int, float], None] | None = None,
-    ) -> List[float]:
+    def train(self, inputs: Tensor, targets: Sequence[int], epochs: int, *, callback: Callable[[int, float], None] | None = None) -> List[float]:
         if epochs <= 0:
             raise ValueError("epochs must be greater than zero.")
-
         history: List[float] = []
-
         for epoch in range(1, epochs + 1):
             loss_value = self.train_step(inputs, targets)
             history.append(loss_value)
-
             if callback is not None:
                 callback(epoch, loss_value)
-
         return history
 
 
