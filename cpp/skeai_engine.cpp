@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <memory_resource>
 #include <new>
+#include <chrono>
 #include <stdexcept>
 #include <vector>
 
@@ -2622,6 +2625,32 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         static_cast<std::size_t>(sequence_length);
     const std::size_t head_dim = d / heads;
 
+    using TrainClock = std::chrono::steady_clock;
+    const bool profile = []() {
+        const char* value = std::getenv("SKEAI_CPP_PROFILE");
+        return value != nullptr && value[0] == '1';
+    }();
+    const auto profile_start =
+        profile ? TrainClock::now() : TrainClock::time_point{};
+
+    double embedding_ms = 0.0;
+    double normalization_ms = 0.0;
+    double q_projection_ms = 0.0;
+    double k_projection_ms = 0.0;
+    double v_projection_ms = 0.0;
+    double attention_scores_ms = 0.0;
+    double attention_softmax_ms = 0.0;
+    double attention_weighted_sum_ms = 0.0;
+    double output_projection_ms = 0.0;
+    double residual_ms = 0.0;
+    double feed_forward_ms = 0.0;
+    double activation_ms = 0.0;
+    double lm_head_ms = 0.0;
+    double loss_ms = 0.0;
+    double backward_ms = 0.0;
+    double gradient_accumulation_ms = 0.0;
+    double optimizer_ms = 0.0;
+
     const std::size_t token_parameter_count = vocab * d;
     const std::size_t position_parameter_count = context * d;
     const std::size_t qkv_parameter_count = d * d;
@@ -2680,6 +2709,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     try {
         TrainMatrix x(length, d);
 
+        const auto embedding_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
         for (std::size_t row = 0; row < length; ++row) {
             const int token_id = token_ids[row];
             const double* token_row =
@@ -2695,6 +2726,11 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                     token_row[column] +
                     position_row[column];
             }
+        }
+        if (profile) {
+            embedding_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - embedding_start
+            ).count();
         }
 
         std::vector<TrainLayerCache> caches;
@@ -2744,16 +2780,43 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             TrainLayerCache& cache = caches[layer];
             cache.input = x;
 
+            auto normalization_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             train_layer_norm_forward(
                 x,
                 cache.norm_x,
                 cache.mean1,
                 cache.inv1
             );
+            if (profile) {
+                normalization_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - normalization_start
+                ).count();
+            }
 
+            auto q_start = profile ? TrainClock::now() : TrainClock::time_point{};
             cache.q = train_matmul(cache.norm_x, wq);
+            if (profile) {
+                q_projection_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - q_start
+                ).count();
+            }
+
+            auto k_start = profile ? TrainClock::now() : TrainClock::time_point{};
             cache.k = train_matmul(cache.norm_x, wk);
+            if (profile) {
+                k_projection_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - k_start
+                ).count();
+            }
+
+            auto v_start = profile ? TrainClock::now() : TrainClock::time_point{};
             cache.v = train_matmul(cache.norm_x, wv);
+            if (profile) {
+                v_projection_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - v_start
+                ).count();
+            }
 
             cache.probabilities.resize(heads);
             cache.merged = TrainMatrix(length, d);
@@ -2771,17 +2834,39 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                     train_slice_columns(cache.v, start, head_dim);
 
                 TrainMatrix kt = train_transpose(kh);
+                auto attention_scores_start =
+                    profile ? TrainClock::now() : TrainClock::time_point{};
                 TrainMatrix scores =
                     train_matmul(qh, kt);
 
                 for (double& value : scores.values) {
                     value *= attention_scale;
                 }
+                if (profile) {
+                    attention_scores_ms += std::chrono::duration<double, std::milli>(
+                        TrainClock::now() - attention_scores_start
+                    ).count();
+                }
 
+                auto attention_softmax_start =
+                    profile ? TrainClock::now() : TrainClock::time_point{};
                 TrainMatrix probs =
                     train_causal_softmax(scores);
+                if (profile) {
+                    attention_softmax_ms += std::chrono::duration<double, std::milli>(
+                        TrainClock::now() - attention_softmax_start
+                    ).count();
+                }
+
+                auto attention_weighted_sum_start =
+                    profile ? TrainClock::now() : TrainClock::time_point{};
                 TrainMatrix attended =
                     train_matmul(probs, vh);
+                if (profile) {
+                    attention_weighted_sum_ms += std::chrono::duration<double, std::milli>(
+                        TrainClock::now() - attention_weighted_sum_start
+                    ).count();
+                }
 
                 train_write_slice(
                     cache.merged,
@@ -2792,26 +2877,69 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                     std::move(probs);
             }
 
+            auto output_projection_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             cache.attention_output =
                 train_matmul(cache.merged, wo);
+            if (profile) {
+                output_projection_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - output_projection_start
+                ).count();
+            }
 
+            auto residual_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             cache.residual =
                 train_add(x, cache.attention_output);
+            if (profile) {
+                residual_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - residual_start
+                ).count();
+            }
 
+            auto normalization2_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             train_layer_norm_forward(
                 cache.residual,
                 cache.norm_residual,
                 cache.mean2,
                 cache.inv2
             );
+            if (profile) {
+                normalization_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - normalization2_start
+                ).count();
+            }
 
+            auto feed_forward_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             cache.hidden_pre =
                 train_matmul(cache.norm_residual, w1);
+            if (profile) {
+                feed_forward_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - feed_forward_start
+                ).count();
+            }
+
+            auto activation_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             cache.hidden =
                 train_relu(cache.hidden_pre);
+            if (profile) {
+                activation_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - activation_start
+                ).count();
+            }
 
+            auto feed_forward_output_start =
+                profile ? TrainClock::now() : TrainClock::time_point{};
             TrainMatrix feed_forward =
                 train_matmul(cache.hidden, w2);
+            if (profile) {
+                feed_forward_ms += std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - feed_forward_output_start
+                ).count();
+            }
 
             x = train_add(cache.residual, feed_forward);
         }
@@ -2819,18 +2947,35 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         TrainMatrix final_norm;
         TrainBuffer final_mean(train_memory_resource());
         TrainBuffer final_inv(train_memory_resource());
+        auto final_norm_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
         train_layer_norm_forward(
             x,
             final_norm,
             final_mean,
             final_inv
         );
+        if (profile) {
+            normalization_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - final_norm_start
+            ).count();
+        }
 
         TrainMatrix lm_head(d, vocab);
-        lm_head.values = parameters[2]->values;
+        lm_head.values.assign(
+            parameters[2]->values.begin(),
+            parameters[2]->values.end()
+        );
 
+        auto lm_head_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
         TrainMatrix logits =
             train_matmul(final_norm, lm_head);
+        if (profile) {
+            lm_head_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - lm_head_start
+            ).count();
+        }
 
         if (!train_is_finite(logits)) {
             PyErr_SetString(
@@ -2843,6 +2988,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         TrainMatrix dlogits(length, vocab);
         double total_loss = 0.0;
 
+        const auto loss_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
         for (std::size_t row = 0; row < length; ++row) {
             const double* logits_row = logits.row_ptr(row);
             double* dlogits_row = dlogits.row_ptr(row);
@@ -2896,6 +3043,14 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         for (double& value : dlogits.values) {
             value *= inverse_length;
         }
+        if (profile) {
+            loss_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - loss_start
+            ).count();
+        }
+
+        const auto backward_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
 
         TrainMatrix final_norm_transpose =
             train_transpose(final_norm);
@@ -3185,6 +3340,15 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             );
         }
 
+        if (profile) {
+            backward_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - backward_start
+            ).count();
+        }
+
+        const auto gradient_accumulation_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
+
         for (std::size_t row = 0; row < length; ++row) {
             const int token_id = token_ids[row];
 
@@ -3205,6 +3369,15 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                 position_gradient[column] += grad_row[column];
             }
         }
+
+        if (profile) {
+            gradient_accumulation_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - gradient_accumulation_start
+            ).count();
+        }
+
+        const auto optimizer_start =
+            profile ? TrainClock::now() : TrainClock::time_point{};
 
         for (std::size_t parameter = 0;
              parameter < expected_parameters;
@@ -3239,6 +3412,57 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                     return nullptr;
                 }
             }
+        }
+
+        if (profile) {
+            optimizer_ms += std::chrono::duration<double, std::milli>(
+                TrainClock::now() - optimizer_start
+            ).count();
+            const double total_ms =
+                std::chrono::duration<double, std::milli>(
+                    TrainClock::now() - profile_start
+                ).count();
+
+            std::fprintf(
+                stderr,
+                "cpp_profile "
+                "embedding_ms=%.3f "
+                "normalization_ms=%.3f "
+                "q_ms=%.3f "
+                "k_ms=%.3f "
+                "v_ms=%.3f "
+                "attention_scores_ms=%.3f "
+                "attention_softmax_ms=%.3f "
+                "attention_weighted_sum_ms=%.3f "
+                "output_projection_ms=%.3f "
+                "residual_ms=%.3f "
+                "feed_forward_ms=%.3f "
+                "activation_ms=%.3f "
+                "lm_head_ms=%.3f "
+                "loss_ms=%.3f "
+                "backward_ms=%.3f "
+                "gradient_accumulation_ms=%.3f "
+                "optimizer_ms=%.3f "
+                "total_ms=%.3f\\n",
+                embedding_ms,
+                normalization_ms,
+                q_projection_ms,
+                k_projection_ms,
+                v_projection_ms,
+                attention_scores_ms,
+                attention_softmax_ms,
+                attention_weighted_sum_ms,
+                output_projection_ms,
+                residual_ms,
+                feed_forward_ms,
+                activation_ms,
+                lm_head_ms,
+                loss_ms,
+                backward_ms,
+                gradient_accumulation_ms,
+                optimizer_ms,
+                total_ms
+            );
         }
 
         return PyFloat_FromDouble(
