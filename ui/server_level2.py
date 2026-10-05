@@ -86,8 +86,10 @@ class SkeAILevel2Service:
         message: str,
         *,
         max_new_tokens: int = 48,
-        temperature: float = 0.35,
-        top_k: int = 32,\n        repetition_penalty: float = 1.15,\n        no_repeat_ngram_size: int = 3,
+        temperature: float = 0.75,
+        top_k: int = 32,
+        repetition_penalty: float = 1.15,
+        no_repeat_ngram_size: int = 3,
     ) -> str:
         if max_new_tokens <= 0 or max_new_tokens > 256:
             raise ValueError("max_new_tokens must be between 1 and 256")
@@ -95,6 +97,10 @@ class SkeAILevel2Service:
             raise ValueError("temperature must be between 0 and 2")
         if top_k < 0 or top_k > self.tokenizer.vocab_size:
             raise ValueError("top_k must be between 0 and the vocabulary size")
+        if repetition_penalty < 1.0:
+            raise ValueError("repetition_penalty must be at least 1.0")
+        if no_repeat_ngram_size < 0:
+            raise ValueError("no_repeat_ngram_size cannot be negative")
 
         with self.lock:
             return self.conversation.chat(
@@ -103,6 +109,8 @@ class SkeAILevel2Service:
                 temperature=temperature,
                 top_k=top_k,
                 seed=1234,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
 
     def reset_conversation(self, *, clear_memory: bool = False) -> None:
@@ -170,8 +178,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 response = self.service.chat(
                     payload.get("message", ""),
                     max_new_tokens=int(payload.get("max_new_tokens", 48)),
-                    temperature=float(payload.get("temperature", 0.35)),
-                    top_k=int(payload.get("top_k", 8)),
+                    temperature=float(payload.get("temperature", 0.75)),
+                    top_k=int(payload.get("top_k", 32)),
+                    repetition_penalty=float(
+                        payload.get("repetition_penalty", 1.15)
+                    ),
+                    no_repeat_ngram_size=int(
+                        payload.get("no_repeat_ngram_size", 3)
+                    ),
                 )
                 self._send_json({"response": response})
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
