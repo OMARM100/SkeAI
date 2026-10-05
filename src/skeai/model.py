@@ -1,5 +1,4 @@
-"""Small sequential neural network for SkeAI 0.3."""
-
+"""Small sequential neural network for SkeAI."""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -7,12 +6,11 @@ from typing import Any, Dict, List
 from .layers import Dense, ReLU, Tanh
 from .tensor import Tensor
 
-
 Layer = Dense | ReLU | Tanh
 
 
 class Sequential:
-    """Run a list of layers in order and reverse order for backpropagation."""
+    """Run layers in order and reverse order for backpropagation."""
 
     def __init__(self, layers: List[Layer]) -> None:
         if not layers:
@@ -42,6 +40,7 @@ class Sequential:
         compute_input_gradient: bool = True,
     ) -> Tensor | None:
         output = gradient
+
         for index in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[index]
 
@@ -56,6 +55,7 @@ class Sequential:
                 )
 
             output = layer.backward(output)
+
         return output
 
     def parameters(self) -> Dict[str, Tensor]:
@@ -65,18 +65,18 @@ class Sequential:
         return self._gradient_cache
 
     def parameter_count(self) -> int:
-        """Return the total number of scalar trainable parameters."""
-        return sum(parameter.size for parameter in self._parameter_cache.values())
+        return sum(
+            parameter.size
+            for parameter in self._parameter_cache.values()
+        )
 
     def state_dict(self) -> Dict[str, Any]:
-        """Return JSON-serializable trainable parameters."""
         return {
             name: parameter.to_list()
             for name, parameter in self._parameter_cache.items()
         }
 
     def load_state_dict(self, state: Dict[str, Any]) -> None:
-        """Load trainable parameters after validating their shapes."""
         parameters = self._parameter_cache
 
         if set(state) != set(parameters):
@@ -84,12 +84,14 @@ class Sequential:
 
         for name, parameter in parameters.items():
             loaded = Tensor(state[name])
+
             if loaded.shape != parameter.shape:
                 raise ValueError(
                     f"Shape mismatch for parameter '{name}': "
                     f"expected {parameter.shape}, got {loaded.shape}."
                 )
-            parameter._data = loaded.to_list()  # type: ignore[attr-defined]
+
+            parameter._replace_storage(loaded._storage)
 
 
 __all__ = ["Sequential"]

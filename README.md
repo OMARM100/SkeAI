@@ -2,218 +2,129 @@
 
 SkeAI is an experimental artificial intelligence project built from scratch.
 
-The first goal is intentionally small: build and understand a lightweight Arabic/English language-learning model without starting from a pretrained model.
-
-## Project goals
-
-- Build the core components ourselves.
-- Start with a very small dataset.
-- Support Arabic and English text.
-- Train initially on CPU so development can happen on a phone.
-- Keep the architecture lightweight and understandable.
-- Measure performance instead of guessing where the bottlenecks are.
-- Gradually add native/GPU acceleration later without hiding the core implementation.
-- Eventually integrate a lightweight runtime into SkeOS for kernel testing and diagnostics.
-
 ## Current stage
 
-**SkeAI 0.2 — Performance engine foundation**
+**SkeAI 0.4 — C++ engine foundation**
 
-The project now includes:
+The model is intentionally small. This milestone is about building the numerical engine correctly before scaling the model.
+
+The foundation includes:
 
 - A character-level Arabic/English tokenizer.
-- A from-scratch tensor engine.
-- Dense, ReLU, and Tanh layers.
-- Cross-entropy and mean-squared-error losses.
-- SGD optimization with in-place parameter updates.
+- A contiguous tensor abstraction backed by C++-owned storage.
+- C++ implementations of tensor operations, neural layers, losses, and SGD.
 - A sequential neural network.
 - A tiny fixed-context character language model.
-- A bilingual toy corpus.
-- Text generation.
-- JSON model checkpoints with resume training.
-- Training and engine timing telemetry.
-- A dependency-free numerical benchmark.
-- Automated Python tests through GitHub Actions.
+- JSON checkpoints and resume training.
+- Training telemetry and repeatable benchmarks.
+- Automated tests through GitHub Actions.
 
-The model is intentionally small. It is a learning and engineering milestone, not a general-purpose assistant.
-
-## Run training
+## Build the C++ engine
 
 From the repository root:
 
-```bash
-python -m training.train_tiny
-```
+    python -m tools.build_cpp
 
-The training command now reports:
+The build creates a platform-specific _cpp extension inside src/skeai/.
 
-- Setup time.
-- Per-epoch elapsed time.
-- Average batch-step time.
-- Examples per second.
-- Last-step timing for forward, loss, backward, and optimizer stages.
-- Total training time.
-- Checkpoint write time.
-- Total command time.
+Python remains responsible for high-level model orchestration and the public API. C++ owns the scalar tensor storage and executes the numerical kernels.
 
-The model is saved to:
+## Run training
 
-```text
-models/tiny_character_model.json
-```
+    python -m training.train_tiny
 
-To continue training from the saved checkpoint:
+Resume from the checkpoint:
 
-```bash
-python -m training.train_tiny --resume
-```
+    python -m training.train_tiny --resume
 
-## Benchmark the engine
+## Benchmark
 
-Run the dependency-free benchmark:
+    python -m benchmarks.benchmark_engine
 
-```bash
-python -m benchmarks.benchmark_engine
-```
+The benchmark measures matrix multiplication, Dense forward/backward, a real training step, layer timing, and parameter count.
 
-It measures:
+The complete training step is the primary performance signal. An isolated kernel improvement is not accepted when the end-to-end workload gets slower.
 
-- Tensor matrix multiplication.
-- Dense forward.
-- Dense backward.
-- A real SkeAI training step.
-- Approximate matrix-operation throughput.
-- Model parameter count.
-- Timing of the main training stages.
+## Tests
 
-Run it on the phone and later on a desktop using the same command. The results give us a repeatable baseline before adding larger models.
+Build the C++ engine first:
 
-## Run tests
+    python -m tools.build_cpp
+    python -m unittest discover -s tests -v
 
-Locally:
+GitHub Actions performs the same build before running the tests.
 
-```bash
-python -m unittest discover -s tests -v
-```
+## Architecture
 
-GitHub Actions runs the same test suite on every push to `main` and every pull request.
+    Python Runtime
+          |
+      Tensor API
+          |
+    Python/C++ Boundary
+          |
+    +---------------------------+
+    |       SkeAI C++ Core      |
+    |---------------------------|
+    | C++ tensor storage        |
+    | MatMul                    |
+    | Dense                     |
+    | ReLU / Tanh               |
+    | MSE / CrossEntropy        |
+    | SGD                       |
+    +-------------+-------------+
+                  |
+                 CPU
 
-## Current architecture
+The important boundary is the tensor storage itself:
 
-```text
-Text
-  ↓
-Tokenizer
-  ↓
-Tokens
-  ↓
-Context Builder
-  ↓
-Tensor Engine
-  ↓
-Neural Network
-  ↓
-Logits
-  ↓
-Loss
-  ↓
-Backpropagation
-  ↓
-Optimizer
-  ↓
-Updated Weights
-  ↓
-Checkpoint / Runtime
-  ↓
-Text Generation
-```
+    Old experimental path:
+    Python nested lists -> native C kernels
 
-## Long-term runtime architecture
+    New foundation:
+    Python Tensor metadata
+            |
+            v
+    C++-owned contiguous buffer
+            |
+            v
+    C++ numerical kernels
+            |
+            v
+           CPU
 
-The long-term goal is larger than a text generator. We want SkeAI to become a small, modular runtime that can learn and execute multiple classes of tasks.
+The old C bridge is removed instead of being retained as a compatibility layer.
 
-```text
-                 ┌─────────────────────────────┐
-                 │          SkeAI Core          │
-                 │ Tensor + NN + Training       │
-                 └──────────────┬──────────────┘
-                                │
-                 ┌──────────────▼──────────────┐
-                 │       Model / Memory        │
-                 │ language + learned state    │
-                 └──────────────┬──────────────┘
-                                │
-                 ┌──────────────▼──────────────┐
-                 │     Runtime / Orchestrator  │
-                 │ tasks + tools + scheduling   │
-                 └───────┬─────────┬───────────┘
-                         │         │
-                ┌────────▼───┐ ┌──▼───────────┐
-                │ PC / OS    │ │ Voice / I/O │
-                │ tools      │ │ input/output │
-                └────────────┘ └──────────────┘
-                         │
-                ┌────────▼─────────┐
-                │      SkeOS       │
-                │ kernel support   │
-                │ diagnostics      │
-                └──────────────────┘
-```
+## Design rules
 
-This architecture is a future direction. The current release does not yet control a computer, perform autonomous multi-step tasks, or provide real-time voice conversation.
+1. Python handles orchestration, model structure, serialization, and user-facing APIs.
+2. C++ owns tensor scalar storage.
+3. Numerical kernels operate directly on contiguous native memory.
+4. Heavy native kernels release the Python GIL while computing.
+5. Native behavior is validated through end-to-end Python tests.
+6. Performance decisions are based on complete training-step measurements.
 
-## Performance direction
+The project does not depend on PyTorch, TensorFlow, NumPy, or another ML framework.
 
-The performance engine is being improved before the model is made larger. The Python implementation remains the reference/fallback path, while expensive numerical kernels are isolated behind `src/skeai/engine.py`. This gives the project one execution boundary instead of scattering performance-specific fixes across individual layers.
+## Long-term direction
 
-Current hot-path improvements include:
+The same C++ core is intended to grow toward:
 
-1. Direct matrix accumulation in `Tensor.matmul`.
-2. One-pass Dense backward computation for `grad_W`, `grad_b`, and `grad_X`.
-3. In-place SGD parameter updates.
-4. Reusing the cross-entropy gradient instead of rebuilding it during backward.
-5. Runtime timing telemetry for the training stages.
-6. A from-scratch native C backend for matrix multiplication and Dense forward/backward kernels.
+    Tensor and memory runtime
+            |
+    Neural-network runtime
+            |
+    Model and memory system
+            |
+    Task orchestration
+       /            \
+    PC/OS tools    Voice I/O
+            |
+          SkeOS
 
-Build the native backend from the repository root with:
-
-```bash
-python -m tools.build_native
-```
-
-The native module is optional. When it is not built, SkeAI automatically uses the Python reference implementation. The project does not depend on PyTorch, TensorFlow, NumPy, or another ML framework.
-
-The performance rule is now structural: optimize at the engine boundary, measure the complete training step, and reject changes that improve an isolated function while making the end-to-end workload slower.
-
-## Development roadmap
-
-1. Project foundation
-2. Tokenizer
-3. Tensor and numerical operations
-4. Basic neural network layers
-5. Loss and optimizer
-6. Training loop
-7. Tiny character language model
-8. Checkpointing and resume training
-9. Performance telemetry and engine benchmark
-10. Tensor/gradient performance optimization
-11. Better Arabic/English dataset
-12. Improved tokenization
-13. Memory-efficient batching
-14. Small Transformer
-15. Native/GPU acceleration
-16. Task/runtime system
-17. Safe computer/OS tool interface
-18. Voice input/output
-19. SkeOS integration
-20. Kernel diagnostics and development assistant
+This is a future direction. The current project is still a small learning and engineering system.
 
 ## Philosophy
 
-SkeAI is intended to be a learning project first. A small working model is more valuable at this stage than a large model whose internals are hidden behind a framework.
+SkeAI is built to understand the internals instead of hiding them behind a framework.
 
-The core engine should remain modular so the same model and runtime concepts can later be implemented in optimized native code for desktop systems and eventually SkeOS.
-
-## Status
-
-Early development — performance-engine foundation.
+The numerical engine is therefore built as a real native C++ core from the foundation, not as a thin optimization layer placed over Python container objects.

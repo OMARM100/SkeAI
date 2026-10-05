@@ -1,9 +1,9 @@
-"""Optimizers for SkeAI 0.2."""
-
+"""Optimizers implemented through the SkeAI C++ engine."""
 from __future__ import annotations
 
 from typing import Dict
 
+from . import engine
 from .tensor import Tensor
 
 
@@ -29,27 +29,16 @@ class SGD:
             if parameter.shape != gradient.shape:
                 raise ValueError(f"Gradient shape mismatch for parameter '{name}'.")
 
-            parameter_data = parameter._data  # type: ignore[attr-defined]
-            gradient_data = gradient._data  # type: ignore[attr-defined]
-
-            if parameter.ndim == 1:
-                for index in range(parameter.shape[0]):
-                    parameter_data[index] -= (
-                        self.learning_rate * gradient_data[index]
-                    )
-            elif parameter.ndim == 2:
-                rows, cols = parameter.shape
-                for row in range(rows):
-                    parameter_row = parameter_data[row]
-                    gradient_row = gradient_data[row]
-                    for col in range(cols):
-                        parameter_row[col] -= (
-                            self.learning_rate * gradient_row[col]
-                        )
-            else:
+            if parameter.ndim not in (1, 2):
                 raise ValueError(
-                    f"SGD currently supports rank-1 and rank-2 tensors, got {parameter.shape}."
+                    "SGD currently supports rank-1 and rank-2 tensors."
                 )
+
+            engine.sgd_step(
+                parameter._storage,
+                gradient._storage,
+                self.learning_rate,
+            )
 
 
 __all__ = ["SGD"]

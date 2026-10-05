@@ -1,65 +1,96 @@
-"""Execution engine for SkeAI numerical kernels.
-
-The public model/layer APIs remain Python-level, while expensive numerical
-kernels live behind this dispatch layer. A native C backend is used when it
-has been built; otherwise the same operations fall back to Python.
-"""
-
+"""Python boundary for the SkeAI C++ numerical engine."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 try:
-    from . import _native
-except ImportError:  # pragma: no cover
-    _native = None
+    from . import _cpp
+except ImportError as exc:  # pragma: no cover
+    _cpp = None
+    NATIVE_IMPORT_ERROR = exc
+else:
+    NATIVE_IMPORT_ERROR = None
 
-NATIVE_AVAILABLE = _native is not None
-BACKEND_NAME = "native-c" if NATIVE_AVAILABLE else "python"
-
-
-def matmul(left: Any, right: Any) -> Any:
-    if NATIVE_AVAILABLE:
-        return _native.matmul(left, right)
-
-    rows = len(left)
-    inner = len(right)
-    cols = len(right[0]) if inner else 0
-    result = [[0.0] * cols for _ in range(rows)]
-
-    for row_index in range(rows):
-        left_row = left[row_index]
-        result_row = result[row_index]
-        for inner_index in range(inner):
-            value = left_row[inner_index]
-            right_row = right[inner_index]
-            for col_index in range(cols):
-                result_row[col_index] += value * right_row[col_index]
-
-    return result
+NATIVE_AVAILABLE = _cpp is not None
+BACKEND_NAME = "cpp" if NATIVE_AVAILABLE else "unavailable"
+SCALAR_TYPE = "float64"
 
 
-def dense_forward(inputs: Any, weights: Any, bias: Any, output: Any) -> None:
-    if NATIVE_AVAILABLE:
-        _native.dense_forward(inputs, weights, bias, output)
-        return
+def _require_cpp() -> Any:
+    if _cpp is None:
+        raise RuntimeError(
+            "SkeAI requires the C++ engine. Run python -m tools.build_cpp first."
+        ) from NATIVE_IMPORT_ERROR
+    return _cpp
 
-    batch_size = len(inputs)
-    input_size = len(weights)
-    output_size = len(bias)
 
-    for batch in range(batch_size):
-        x_row = inputs[batch]
-        result_row = output[batch]
+def storage_from_flat(values: Sequence[float]) -> Any:
+    return _require_cpp().storage_from_flat(values)
 
-        for output_index in range(output_size):
-            result_row[output_index] = bias[output_index]
 
-        for input_index in range(input_size):
-            value = x_row[input_index]
-            weight_row = weights[input_index]
-            for output_index in range(output_size):
-                result_row[output_index] += value * weight_row[output_index]
+def storage_zeros(size: int) -> Any:
+    return _require_cpp().storage_zeros(int(size))
+
+
+def storage_to_flat(storage: Any) -> list[float]:
+    return storage.to_list()
+
+
+def add(left: Any, right: Any) -> Any:
+    return _require_cpp().add(left, right)
+
+
+def subtract(left: Any, right: Any) -> Any:
+    return _require_cpp().subtract(left, right)
+
+
+def multiply(left: Any, right: Any) -> Any:
+    return _require_cpp().multiply(left, right)
+
+
+def scalar_add(storage: Any, scalar: float) -> Any:
+    return _require_cpp().scalar_add(storage, float(scalar))
+
+
+def scalar_subtract(storage: Any, scalar: float) -> Any:
+    return _require_cpp().scalar_subtract(storage, float(scalar))
+
+
+def scalar_reverse_subtract(storage: Any, scalar: float) -> Any:
+    return _require_cpp().scalar_reverse_subtract(storage, float(scalar))
+
+
+def scalar_multiply(storage: Any, scalar: float) -> Any:
+    return _require_cpp().scalar_multiply(storage, float(scalar))
+
+
+def scalar_divide(storage: Any, scalar: float) -> Any:
+    return _require_cpp().scalar_divide(storage, float(scalar))
+
+
+def matmul(left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: int) -> Any:
+    return _require_cpp().matmul(
+        left, right, int(rows), int(inner), int(right_rows), int(cols)
+    )
+
+
+def transpose(storage: Any, rows: int, cols: int) -> Any:
+    return _require_cpp().transpose(storage, int(rows), int(cols))
+
+
+def dense_forward(
+    inputs: Any,
+    weights: Any,
+    bias: Any,
+    output: Any,
+    batch: int,
+    input_size: int,
+    output_size: int,
+) -> None:
+    _require_cpp().dense_forward(
+        inputs, weights, bias, output,
+        int(batch), int(input_size), int(output_size)
+    )
 
 
 def dense_backward(
@@ -70,64 +101,86 @@ def dense_backward(
     grad_bias: Any,
     grad_input: Any,
     compute_input_gradient: bool,
+    batch: int,
+    input_size: int,
+    output_size: int,
 ) -> None:
-    if NATIVE_AVAILABLE:
-        _native.dense_backward(
-            inputs,
-            grad_output,
-            weights,
-            grad_weights,
-            grad_bias,
-            grad_input,
-            bool(compute_input_gradient),
+    _require_cpp().dense_backward(
+        inputs, grad_output, weights,
+        grad_weights, grad_bias, grad_input,
+        bool(compute_input_gradient),
+        int(batch), int(input_size), int(output_size),
+    )
+
+
+def relu_forward(inputs: Any, output: Any) -> None:
+    _require_cpp().relu_forward(inputs, output)
+
+
+def relu_backward(inputs: Any, grad_output: Any, output: Any) -> None:
+    _require_cpp().relu_backward(inputs, grad_output, output)
+
+
+def tanh_forward(inputs: Any, output: Any) -> None:
+    _require_cpp().tanh_forward(inputs, output)
+
+
+def tanh_backward(cached_output: Any, grad_output: Any, output: Any) -> None:
+    _require_cpp().tanh_backward(cached_output, grad_output, output)
+
+
+def mse_forward(predictions: Any, targets: Any) -> float:
+    return float(_require_cpp().mse_forward(predictions, targets))
+
+
+def mse_backward(predictions: Any, targets: Any, gradient: Any) -> None:
+    _require_cpp().mse_backward(predictions, targets, gradient)
+
+
+def cross_entropy_forward(
+    logits: Any,
+    targets: Sequence[int],
+    gradient: Any,
+    batch: int,
+    classes: int,
+) -> float:
+    return float(
+        _require_cpp().cross_entropy_forward(
+            logits, targets, gradient, int(batch), int(classes)
         )
-        return
+    )
 
-    batch_size = len(inputs)
-    input_size = len(weights)
-    output_size = len(grad_bias)
 
-    for input_index in range(input_size):
-        grad_weight_row = grad_weights[input_index]
-        for output_index in range(output_size):
-            grad_weight_row[output_index] = 0.0
-
-    for output_index in range(output_size):
-        grad_bias[output_index] = 0.0
-
-    for batch in range(batch_size):
-        x_row = inputs[batch]
-        go_row = grad_output[batch]
-        grad_input_row = grad_input[batch]
-
-        for output_index in range(output_size):
-            grad_bias[output_index] += go_row[output_index]
-
-        for input_index in range(input_size):
-            x_value = x_row[input_index]
-            grad_weight_row = grad_weights[input_index]
-
-            if compute_input_gradient:
-                weight_row = weights[input_index]
-                total = 0.0
-
-                for output_index in range(output_size):
-                    grad_value = go_row[output_index]
-                    grad_weight_row[output_index] += x_value * grad_value
-                    total += grad_value * weight_row[output_index]
-
-                grad_input_row[input_index] = total
-            else:
-                for output_index in range(output_size):
-                    grad_weight_row[output_index] += (
-                        x_value * go_row[output_index]
-                    )
+def sgd_step(parameter: Any, gradient: Any, learning_rate: float) -> None:
+    _require_cpp().sgd_step(parameter, gradient, float(learning_rate))
 
 
 __all__ = [
     "BACKEND_NAME",
     "NATIVE_AVAILABLE",
-    "dense_backward",
-    "dense_forward",
+    "NATIVE_IMPORT_ERROR",
+    "SCALAR_TYPE",
+    "add",
+    "subtract",
+    "multiply",
+    "scalar_add",
+    "scalar_subtract",
+    "scalar_reverse_subtract",
+    "scalar_multiply",
+    "scalar_divide",
     "matmul",
+    "transpose",
+    "dense_forward",
+    "dense_backward",
+    "relu_forward",
+    "relu_backward",
+    "tanh_forward",
+    "tanh_backward",
+    "mse_forward",
+    "mse_backward",
+    "cross_entropy_forward",
+    "sgd_step",
+    "storage_from_flat",
+    "storage_zeros",
+    "storage_to_flat",
 ]

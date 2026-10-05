@@ -1,10 +1,4 @@
-"""Minimal tensor operations for SkeAI 0.3.
-
-The Tensor API stays deliberately small and framework-free. Internal hot paths
-can reuse already-validated buffers without paying the public constructor's
-normalization and shape-inference cost on every training step.
-"""
-
+"""Dense tensor abstraction backed by contiguous C++ storage."""
 from __future__ import annotations
 
 import math
@@ -20,79 +14,77 @@ def _is_sequence(value: object) -> bool:
     return isinstance(value, (list, tuple))
 
 
-def _infer_shape(data: NestedNumbers) -> Tuple[int, ...]:
-    if not _is_sequence(data):
-        return ()
-
-    seq = list(data)  # type: ignore[arg-type]
-    if not seq:
-        return (0,)
-
-    first_shape = _infer_shape(seq[0])
-    for item in seq[1:]:
-        if _infer_shape(item) != first_shape:
-            raise ValueError("Tensor data must be rectangular.")
-
-    return (len(seq),) + first_shape
-
-
 def _to_nested_list(data: NestedNumbers) -> object:
     if not _is_sequence(data):
         if not isinstance(data, (int, float)) or isinstance(data, bool):
             raise TypeError("Tensor values must be int or float.")
-        return float(data)
-
+        value = float(data)
+        if not math.isfinite(value):
+            raise ValueError("Tensor values must be finite.")
+        return value
     return [_to_nested_list(item) for item in data]  # type: ignore[arg-type]
+
+
+def _infer_shape(data: object) -> Tuple[int, ...]:
+    if not isinstance(data, list):
+        return ()
+    if not data:
+        return (0,)
+    first_shape = _infer_shape(data[0])
+    for item in data[1:]:
+        if _infer_shape(item) != first_shape:
+            raise ValueError("Tensor data must be rectangular.")
+    return (len(data),) + first_shape
 
 
 def _flatten(data: object) -> List[float]:
     if not isinstance(data, list):
         return [float(data)]
-
-    output: List[float] = []
+    values: List[float] = []
     for item in data:
-        output.extend(_flatten(item))
-    return output
+        values.extend(_flatten(item))
+    return values
 
 
-def _elementwise(a: object, b: object, operation) -> object:
-    if isinstance(a, list) and isinstance(b, list):
-        if len(a) != len(b):
-            raise ValueError("Tensor shapes are not compatible.")
-        return [_elementwise(x, y, operation) for x, y in zip(a, b)]
+def _unflatten(values: Sequence[float], shape: Tuple[int, ...]) -> object:
+    if not shape:
+        if len(values) != 1:
+            raise ValueError("Scalar tensor storage must contain one value.")
+        return float(values[0])
 
-    if isinstance(a, list) or isinstance(b, list):
-        raise ValueError("Tensor shapes are not compatible.")
+    iterator = iter(values)
 
-    return operation(float(a), float(b))
+    def build(dimension: int) -> object:
+        if dimension == len(shape):
+            return float(next(iterator))
+        return [build(dimension + 1) for _ in range(shape[dimension])]
 
-
-def _map(data: object, operation) -> object:
-    if isinstance(data, list):
-        return [_map(item, operation) for item in data]
-    return operation(float(data))
+    return build(0)
 
 
 class Tensor:
-    """Small dense tensor backed by nested Python lists."""
+    """Dense tensor with contiguous C++-owned numeric storage."""
 
     def __init__(self, data: NestedNumbers) -> None:
         normalized = _to_nested_list(data)
-        self._data = normalized
-        self._shape = _infer_shape(normalized)  # type: ignore[arg-type]
+        self._shape = _infer_shape(normalized)
+        self._storage = engine.storage_from_flat(_flatten(normalized))
 
     @classmethod
-    def _from_data(cls, data: object, shape: Tuple[int, ...]) -> "Tensor":
-        """Build an internal tensor from already-valid floating-point data.
-
-        This private constructor intentionally skips recursive normalization and
-        shape inference. It is used only by engine hot paths that already know
-        the exact shape and data representation.
-        """
+    def _from_storage(cls, storage: object, shape: Tuple[int, ...]) -> "Tensor":
+        expected_size = math.prod(shape)
+        if int(storage.size) != expected_size:
+            raise ValueError("Tensor storage size does not match the requested shape.")
         tensor = cls.__new__(cls)
-        tensor._data = data
+        tensor._storage = storage
         tensor._shape = shape
         return tensor
+
+    @classmethod
+    def zeros(cls, shape: Tuple[int, ...]) -> "Tensor":
+        if any(dimension < 0 for dimension in shape):
+            raise ValueError("Tensor dimensions cannot be negative.")
+        return cls._from_storage(engine.storage_zeros(math.prod(shape)), shape)
 
     @property
     def shape(self) -> Tuple[int, ...]:
@@ -107,28 +99,22 @@ class Tensor:
         return math.prod(self._shape)
 
     def to_list(self) -> object:
-        """Return a copy of the underlying nested-list data."""
-        def copy_nested(value: object) -> object:
-            if isinstance(value, list):
-                return [copy_nested(item) for item in value]
-            return float(value)
-
-        return copy_nested(self._data)
+        return _unflatten(engine.storage_to_flat(self._storage), self._shape)
 
     def flatten(self) -> List[float]:
-        return _flatten(self._data)
+        return engine.storage_to_flat(self._storage)
 
     def __repr__(self) -> str:
-        return f"Tensor(shape={self.shape}, data={self._data!r})"
+        return f"Tensor(shape={self.shape}, data={self.to_list()!r})"
 
     def __add__(self, other: Union["Tensor", Number]) -> "Tensor":
         if isinstance(other, Tensor):
             if self.shape != other.shape:
                 raise ValueError("Tensor shapes must match for addition.")
-            data = _elementwise(self._data, other._data, lambda a, b: a + b)
+            storage = engine.add(self._storage, other._storage)
         else:
-            data = _map(self._data, lambda value: value + float(other))
-        return Tensor(data)  # type: ignore[arg-type]
+            storage = engine.scalar_add(self._storage, float(other))
+        return Tensor._from_storage(storage, self.shape)
 
     def __radd__(self, other: Number) -> "Tensor":
         return self + other
@@ -137,59 +123,71 @@ class Tensor:
         if isinstance(other, Tensor):
             if self.shape != other.shape:
                 raise ValueError("Tensor shapes must match for subtraction.")
-            data = _elementwise(self._data, other._data, lambda a, b: a - b)
+            storage = engine.subtract(self._storage, other._storage)
         else:
-            data = _map(self._data, lambda value: value - float(other))
-        return Tensor(data)  # type: ignore[arg-type]
+            storage = engine.scalar_subtract(self._storage, float(other))
+        return Tensor._from_storage(storage, self.shape)
 
     def __rsub__(self, other: Number) -> "Tensor":
-        return Tensor(_map(self._data, lambda value: float(other) - value))  # type: ignore[arg-type]
+        return Tensor._from_storage(
+            engine.scalar_reverse_subtract(self._storage, float(other)),
+            self.shape,
+        )
 
     def __mul__(self, other: Union["Tensor", Number]) -> "Tensor":
         if isinstance(other, Tensor):
             if self.shape != other.shape:
                 raise ValueError("Tensor shapes must match for multiplication.")
-            data = _elementwise(self._data, other._data, lambda a, b: a * b)
+            storage = engine.multiply(self._storage, other._storage)
         else:
-            data = _map(self._data, lambda value: value * float(other))
-        return Tensor(data)  # type: ignore[arg-type]
+            storage = engine.scalar_multiply(self._storage, float(other))
+        return Tensor._from_storage(storage, self.shape)
 
     def __rmul__(self, other: Number) -> "Tensor":
         return self * other
 
     def __truediv__(self, other: Number) -> "Tensor":
-        if other == 0:
-            raise ZeroDivisionError("Cannot divide a tensor by zero.")
-        return Tensor(_map(self._data, lambda value: value / float(other)))  # type: ignore[arg-type]
+        return Tensor._from_storage(
+            engine.scalar_divide(self._storage, float(other)),
+            self.shape,
+        )
 
     def matmul(self, other: "Tensor") -> "Tensor":
-        """Matrix multiplication for rank-2 tensors."""
         if self.ndim != 2 or other.ndim != 2:
             raise ValueError("matmul currently requires two rank-2 tensors.")
-
         rows, inner = self.shape
         other_inner, cols = other.shape
-
         if inner != other_inner:
             raise ValueError("Incompatible shapes for matrix multiplication.")
-
-        result = engine.matmul(self._data, other._data)
-
-        return Tensor._from_data(result, (rows, cols))
+        return Tensor._from_storage(
+            engine.matmul(
+                self._storage, other._storage,
+                rows, inner, other_inner, cols,
+            ),
+            (rows, cols),
+        )
 
     def transpose(self) -> "Tensor":
         if self.ndim != 2:
             raise ValueError("transpose currently requires a rank-2 tensor.")
-
         rows, cols = self.shape
-        data = [
-            [self._data[row][col] for row in range(rows)]  # type: ignore[index]
-            for col in range(cols)
-        ]
-        return Tensor._from_data(data, (cols, rows))
+        return Tensor._from_storage(
+            engine.transpose(self._storage, rows, cols),
+            (cols, rows),
+        )
 
     def map(self, function) -> "Tensor":
-        return Tensor(_map(self._data, function))  # type: ignore[arg-type]
+        return Tensor._from_storage(
+            engine.storage_from_flat(
+                [function(value) for value in self.flatten()]
+            ),
+            self.shape,
+        )
+
+    def _replace_storage(self, storage: object) -> None:
+        if int(storage.size) != self.size:
+            raise ValueError("Replacement storage has the wrong size.")
+        self._storage = storage
 
 
 __all__ = ["Tensor"]

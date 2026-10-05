@@ -19,5 +19,8 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Build C++ engine
+        run: python -m tools.build_cpp
+
       - name: Run tests
         run: python -m unittest discover -s tests -v
