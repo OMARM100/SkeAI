@@ -102,6 +102,18 @@ class Trainer:
 
         return loss_value
 
+    def evaluate_batches(self, batches) -> float:
+        """Evaluate the model on batches without updating parameters."""
+        losses: List[float] = []
+
+        for inputs, targets in batches:
+            logits = self.model.forward(inputs)
+            losses.append(self.loss.forward(logits, targets))
+
+        if not losses:
+            raise ValueError("Evaluation batches cannot be empty.")
+
+        return sum(losses) / len(losses)
     def train_batches(
         self,
         batches,
