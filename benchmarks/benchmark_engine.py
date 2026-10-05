@@ -144,20 +144,33 @@ def main() -> None:
 
     model = TinyCharacterLanguageModel(
         tokenizer=tokenizer,
-        context_length=8,
+        context_length=16,
         hidden_size=32,
     )
 
     dataset = CharacterLanguageDataset(
         text=text,
         tokenizer=tokenizer,
-        context_length=8,
+        context_length=16,
     )
 
     inputs, targets = dataset.all_batches(batch_size=16)[0]
+    indexed_batch = dataset.all_indexed_batches(batch_size=16)[0]
 
     trainer = Trainer(
         model=model.network,
+        optimizer=SGD(learning_rate=0.05),
+        loss=CrossEntropyLoss(),
+        enable_timing=True,
+    )
+
+    indexed_model = TinyCharacterLanguageModel(
+        tokenizer=tokenizer,
+        context_length=16,
+        hidden_size=32,
+    )
+    indexed_trainer = Trainer(
+        model=indexed_model.network,
         optimizer=SGD(learning_rate=0.05),
         loss=CrossEntropyLoss(),
         enable_timing=True,
@@ -195,6 +208,30 @@ def main() -> None:
     print(f"train_step_loss={totals['loss_ms'] / repeats:.3f}ms")
     print(f"train_step_backward={totals['backward_ms'] / repeats:.3f}ms")
     print(f"train_step_optimizer={totals['optimizer_ms'] / repeats:.3f}ms")
+
+    for _ in range(warmups):
+        indexed_trainer.train_step(indexed_batch)
+
+    indexed_start = perf_counter()
+
+    for _ in range(repeats):
+        indexed_trainer.train_step(indexed_batch)
+
+    indexed_elapsed = perf_counter() - indexed_start
+    indexed_average_step = indexed_elapsed / repeats
+
+    speedup = (
+        average_step / indexed_average_step
+        if indexed_average_step > 0.0
+        else 0.0
+    )
+
+    print(
+        f"train_step_indexed=batch16 "
+        f"avg={indexed_average_step * 1000.0:.3f}ms "
+        f"throughput={16 / indexed_average_step:.2f}examples/s"
+    )
+    print(f"indexed_speedup_vs_dense={speedup:.2f}x")
 
     forward_profile, backward_profile, loss_forward, loss_backward = (
         profile_model_layers(model, inputs, targets, repeats=5)
