@@ -137,18 +137,18 @@ def _fixed_target_window(
     target_index: int,
     context_length: int,
 ) -> tuple[list[int], list[int]] | None:
-    # A response-focused example keeps the same fixed context size required by
-    # the fused native trainer, while choosing the final target around an
-    # assistant response token rather than an arbitrary corpus offset.
+    # Keep at most context_length tokens, but do not discard early assistant
+    # responses merely because they occur before a full context is available.
+    # Native training already supports sequences shorter than context_length.
     if context_length <= 0:
         raise ValueError("context_length must be positive.")
-    if target_index < context_length or target_index >= len(token_ids):
+    if target_index < 0 or target_index >= len(token_ids):
         return None
 
-    start = target_index - context_length
+    start = max(0, target_index - context_length)
     inputs = token_ids[start:target_index]
     targets = token_ids[start + 1:target_index + 1]
-    if len(inputs) != context_length or len(targets) != context_length:
+    if not inputs or len(inputs) != len(targets):
         return None
     return inputs, targets
 
@@ -157,12 +157,14 @@ def build_response_focused_samples(
     conversations: list[list[tuple[str, str]]],
     tokenizer: HybridTokenizer,
     context_length: int,
-) -> list[tuple[list[int], list[int]]]:
-    # The normal dialogue windows train the whole conversation stream. These
-    # additional windows deliberately end on assistant response tokens, so
-    # useful answer tokens receive more learning signal without changing the
-    # native trainer interface or introducing a second Python training path.
-    samples: list[tuple[list[int], list[int]]] = []
+) -> list[tuple[list[int], list[int], list[float]]]:
+    # Each focused sample is anchored to a real assistant response inside the
+    # full conversation context. Context tokens retain a small learning weight
+    # so the model learns the user->context->response relationship instead of
+    # optimizing only the answer span.
+    samples: list[tuple[list[int], list[int], list[float]]] = []
+    context_weight = 0.25
+    response_weight = 1.0
 
     for conversation in conversations:
         dialogue_lines = [TRAINING_SELF_CONTEXT]
@@ -199,8 +201,7 @@ def build_response_focused_samples(
 
             candidate_indices = {
                 response_start,
-                response_start + min(2, len(response_tokens) - 1),
-                response_start + min(5, len(response_tokens) - 1),
+                response_start + len(response_tokens) // 2,
                 response_last,
             }
 
@@ -210,19 +211,20 @@ def build_response_focused_samples(
                     target_index,
                     context_length,
                 )
-                if sample is not None:
-                    inputs, targets = sample
-                    sample_start = target_index - context_length
-                    weights = []
-                    for offset in range(context_length):
-                        global_target_position = sample_start + offset + 1
-                        weights.append(
-                            1.0
-                            if response_start <= global_target_position <= target_index
-                            else 0.0
-                        )
-                    if any(weight > 0.0 for weight in weights):
-                        samples.append((inputs, targets, weights))
+                if sample is None:
+                    continue
+
+                inputs, targets = sample
+                sample_start = target_index - len(inputs)
+                weights = []
+                for offset in range(len(targets)):
+                    global_target_position = sample_start + offset + 1
+                    weights.append(
+                        response_weight
+                        if response_start <= global_target_position <= target_index
+                        else context_weight
+                    )
+                samples.append((inputs, targets, weights))
 
             dialogue_lines.extend(
                 [
@@ -292,15 +294,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train SkeAI Level 2 Transformer."
     )
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--dialogue-repeat", type=int, default=12)
-    parser.add_argument("--response-focus-repeat", type=int, default=8)
-    parser.add_argument("--context", type=int, default=48)
-    parser.add_argument("--vocab", type=int, default=512)
-    parser.add_argument("--d-model", type=int, default=32)
-    parser.add_argument("--heads", type=int, default=2)
-    parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--ff", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=4)
+    parser.add_argument("--dialogue-repeat", type=int, default=8)
+    parser.add_argument("--response-focus-repeat", type=int, default=4)
+    parser.add_argument("--context", type=int, default=128)
+    parser.add_argument("--vocab", type=int, default=2048)
+    parser.add_argument("--d-model", type=int, default=128)
+    parser.add_argument("--heads", type=int, default=4)
+    parser.add_argument("--layers", type=int, default=4)
+    parser.add_argument("--ff", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=0.003)
     parser.add_argument("--warmup-epochs", type=int, default=2)
     parser.add_argument("--final-learning-rate-scale", type=float, default=0.35)
@@ -431,9 +433,9 @@ def main() -> None:
     ):
         raise ValueError("One of the training or validation corpora is too short.")
 
-    # Dialogue examples are deliberately oversampled. This is the first
-    # conversation milestone, so the model must spend meaningful training
-    # capacity learning turn boundaries, identity, and short answers.
+    # Keep dialogue and response-focused objectives balanced rather than running
+    # a separate response-only phase that can shift the model distribution at
+    # the end of every epoch.
     language_training_steps = len(language_samples)
     dialogue_training_steps = len(dialogue_samples) * args.dialogue_repeat
     response_focused_training_steps = (
@@ -447,6 +449,16 @@ def main() -> None:
     response_training_pool = (
         response_focused_samples * args.response_focus_repeat
     )
+
+    mixed_training_samples = [
+        (
+            sample[0],
+            sample[1],
+            [1.0] * len(sample[1]),
+        )
+        for sample in training_pool
+    ]
+    mixed_training_samples.extend(response_training_pool)
 
     trainer = Level2Trainer(
         model=model,
@@ -479,6 +491,8 @@ def main() -> None:
     print(f"dialogue_training_steps={dialogue_training_steps}")
     print(f"response_focused_training_steps={response_focused_training_steps}")
     print(f"training_pool={len(training_pool)}")
+    print(f"response_training_pool={len(response_training_pool)}")
+    print(f"mixed_training_samples={len(mixed_training_samples)}")
     print(f"validation_samples={len(validation_samples)}")
     print(f"parameter_count={model.parameter_count()}")
     print(f"context_length={context_length}")
@@ -504,9 +518,10 @@ def main() -> None:
         )
         trainer.optimizer.learning_rate = epoch_learning_rate
 
-        # Always train on the complete training pool.
-        # The corpus is the source of truth; no subset of samples is selected.
-        selected = list(training_pool)
+        # Mix ordinary language/dialogue samples with response-focused samples
+        # before shuffling. This avoids a response-only optimizer phase at the
+        # end of each epoch and keeps the learned distribution balanced.
+        selected = list(mixed_training_samples)
         rng.shuffle(selected)
 
         if not selected:
@@ -517,16 +532,9 @@ def main() -> None:
         train_loss = trainer.train_batch(
             [sample[0] for sample in selected],
             [sample[1] for sample in selected],
+            [sample[2] for sample in selected],
         )
-
-        response_selected = list(response_training_pool)
-        rng.shuffle(response_selected)
-        response_loss = trainer.train_batch(
-            [sample[0] for sample in response_selected],
-            [sample[1] for sample in response_selected],
-            [sample[2] for sample in response_selected],
-        )
-        completed_steps += steps_this_epoch + len(response_selected)
+        completed_steps += steps_this_epoch
 
         language_validation_total = 0.0
         language_validation_count = 0
@@ -589,7 +597,6 @@ def main() -> None:
             f"epoch={epoch} "
             f"epoch_learning_rate={epoch_learning_rate:.8f} "
             f"train_loss={train_loss:.6f} "
-            f"response_train_loss={response_loss:.6f} "
             f"validation_loss={validation_loss:.6f} "
             f"language_validation_loss={language_validation_loss:.6f} "
             f"dialogue_validation_loss={dialogue_validation_loss:.6f} "
@@ -635,6 +642,7 @@ def main() -> None:
         "final_learning_rate_scale": args.final_learning_rate_scale,
         "training_pool": len(training_pool),
         "response_training_pool": len(response_training_pool),
+        "mixed_training_samples": len(mixed_training_samples),
         "completed_steps": completed_steps,
         "best_validation_loss": best_validation,
         "parameter_count": model.parameter_count(),
