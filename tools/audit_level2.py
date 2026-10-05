@@ -84,7 +84,7 @@ def main() -> None:
     language_samples = make_samples(
         train_tokens,
         config.context_length,
-        stride=max(1, config.context_length // 2),
+        stride=config.context_length,
     )
     dialogue_samples = build_dialogue_samples(
         conversations,
@@ -104,7 +104,11 @@ def main() -> None:
         raise AssertionError("response-focused: no samples were generated.")
 
     for index, (inputs, targets, weights) in enumerate(response_samples):
-        if not inputs or len(inputs) != len(targets) != len(weights):
+        if (
+            not inputs
+            or len(inputs) != len(targets)
+            or len(inputs) != len(weights)
+        ):
             raise AssertionError(
                 f"response-focused: invalid lengths at sample {index}."
             )
