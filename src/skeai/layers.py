@@ -140,34 +140,32 @@ class Dense:
         for output_index in range(output_size):
             grad_b[output_index] = 0.0
 
-        for batch in range(batch_size):
-            go_row = go[batch]
-            for output_index in range(output_size):
-                grad_b[output_index] += go_row[output_index]
+        # Fuse grad_W, grad_b, and grad_X into one batch traversal.
+        # This keeps x/go rows hot and removes a second full traversal of the
+        # batch. The arithmetic is unchanged; only the Python loop structure
+        # is optimized.
+        input_range = range(input_size)
+        output_range = range(output_size)
 
-        # grad_W = X^T @ grad_output.
-        # For each input row we keep the destination gradient row contiguous.
-        for input_index in range(input_size):
-            grad_w_row = grad_w[input_index]
-            for batch in range(batch_size):
-                x_value = x[batch][input_index]
-                go_row = go[batch]
-                for output_index in range(output_size):
-                    grad_w_row[output_index] += (
-                        x_value * go_row[output_index]
-                    )
-
-        # grad_X = grad_output @ W^T.
-        # Each weight row is contiguous in memory for the inner loop.
         for batch in range(batch_size):
+            x_row = x[batch]
             go_row = go[batch]
             grad_x_row = grad_x[batch]
 
-            for input_index in range(input_size):
+            for output_index in output_range:
+                grad_b[output_index] += go_row[output_index]
+
+            for input_index in input_range:
+                x_value = x_row[input_index]
                 weight_row = w[input_index]
+                grad_w_row = grad_w[input_index]
                 total = 0.0
-                for output_index in range(output_size):
-                    total += go_row[output_index] * weight_row[output_index]
+
+                for output_index in output_range:
+                    grad_value = go_row[output_index]
+                    grad_w_row[output_index] += x_value * grad_value
+                    total += grad_value * weight_row[output_index]
+
                 grad_x_row[input_index] = total
 
         return self._cached_grad_input
