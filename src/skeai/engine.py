@@ -93,6 +93,46 @@ def dense_forward(
     )
 
 
+def dense_indexed_forward(
+    indices: Sequence[int],
+    weights: Any,
+    bias: Any,
+    output: Any,
+    batch: int,
+    input_size: int,
+    output_size: int,
+) -> None:
+    _require_cpp().dense_indexed_forward(
+        indices,
+        weights,
+        bias,
+        output,
+        int(batch),
+        int(input_size),
+        int(output_size),
+    )
+
+
+def dense_indexed_backward(
+    indices: Sequence[int],
+    grad_output: Any,
+    grad_weights: Any,
+    grad_bias: Any,
+    batch: int,
+    input_size: int,
+    output_size: int,
+) -> None:
+    _require_cpp().dense_indexed_backward(
+        indices,
+        grad_output,
+        grad_weights,
+        grad_bias,
+        int(batch),
+        int(input_size),
+        int(output_size),
+    )
+
+
 def dense_backward(
     inputs: Any,
     grad_output: Any,
@@ -181,6 +221,8 @@ __all__ = [
     "matmul",
     "transpose",
     "dense_forward",
+    "dense_indexed_forward",
+    "dense_indexed_backward",
     "dense_backward",
     "relu_forward",
     "relu_backward",
