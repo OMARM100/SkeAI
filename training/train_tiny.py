@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from math import inf
 from pathlib import Path
 from time import perf_counter
@@ -25,7 +26,7 @@ DEFAULT_MIN_DELTA = 0.001
 BATCH_SIZE = 16
 BATCH_LOG_EVERY = 50
 
-CONTEXT_LENGTH = 16
+CONTEXT_LENGTH = 32
 HIDDEN_SIZE = 32
 LEARNING_RATE = 0.05
 WEIGHT_DECAY = 0.001
@@ -67,8 +68,20 @@ def main() -> None:
 
     setup_start = perf_counter()
     text = CORPUS_PATH.read_text(encoding="utf-8")
+    dialogue_path = ROOT / "data" / "samples" / "tiny_dialogue.txt"
+    dialogue_text = dialogue_path.read_text(encoding="utf-8")
     validation_text = VALIDATION_PATH.read_text(encoding="utf-8")
-    model = load_model(args.resume, text)
+    training_text = text + "\n" + dialogue_text
+    model = load_model(args.resume, training_text)
+
+    dialogue_json = ROOT / "data" / "samples" / "tiny_dialogue.json"
+    dialogue_entries = json.loads(dialogue_json.read_text(encoding="utf-8"))
+    response_memory = {
+        str(item["input"]): str(item["response"])
+        for item in dialogue_entries
+        if isinstance(item, dict) and "input" in item and "response" in item
+    }
+    model.set_response_memory(response_memory)
 
     unknown = sorted(
         {c for c in validation_text if c not in model.tokenizer.token_to_id},
@@ -80,7 +93,7 @@ def main() -> None:
         )
 
     dataset = CharacterLanguageDataset(
-        text=text,
+        text=training_text,
         tokenizer=model.tokenizer,
         context_length=model.context_length,
     )
@@ -197,11 +210,11 @@ def main() -> None:
     print(f"training_seconds={training_seconds:.4f}")
     print(f"total_seconds={total_seconds:.4f}")
 
-    for prompt in ["hello", "مرحبا", "أنا ", "كيف حالك؟ "]:
-        result = best_model.generate(
+    for prompt in ["hello", "مرحبا", "أنا ", "كيف حالك؟ ", "ما اسمك؟"]:
+        result = best_model.respond(
             prompt,
             max_new_tokens=32,
-            temperature=0.85,
+            temperature=0.65,
             seed=1234,
             top_k=8,
             repetition_penalty=1.12,
