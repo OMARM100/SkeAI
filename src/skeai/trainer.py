@@ -1,4 +1,4 @@
-"""Training loop and performance telemetry for SkeAI 0.2."""
+"""Training loop and performance telemetry for SkeAI 0.3."""
 
 from __future__ import annotations
 
@@ -30,6 +30,12 @@ class Trainer:
         self.optimizer = optimizer
         self.loss = loss or CrossEntropyLoss()
         self.enable_timing = enable_timing
+
+        # Cache these mappings once. Rebuilding parameter/gradient dictionaries
+        # every train step adds avoidable Python overhead.
+        self._parameters = model.parameters()
+        self._gradients = model.gradients()
+
         self.last_step_timing: Dict[str, float] = {
             "forward_ms": 0.0,
             "loss_ms": 0.0,
@@ -80,10 +86,7 @@ class Trainer:
         else:
             backward_ms = 0.0
 
-        self.optimizer.step(
-            self.model.parameters(),
-            self.model.gradients(),
-        )
+        self.optimizer.step(self._parameters, self._gradients)
 
         total_ms = (perf_counter() - total_start) * 1000.0
 
