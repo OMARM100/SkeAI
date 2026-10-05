@@ -30,13 +30,20 @@ class CorpusTests(unittest.TestCase):
             if len(line.strip()) >= 20
         ]
 
-        self.assertGreaterEqual(len(lines), 45)
+        self.assertGreaterEqual(len(lines), 90)
         self.assertEqual(len(lines), len(set(lines)))
 
-    def test_training_corpus_has_about_4000_characters(self) -> None:
+    def test_training_corpus_has_reasonable_size(self) -> None:
         text = TRAINING_PATH.read_text(encoding="utf-8")
-        self.assertGreaterEqual(len(text), 3900)
-        self.assertLessEqual(len(text), 4050)
+
+        self.assertGreaterEqual(len(text), 7500)
+        self.assertLessEqual(len(text), 9000)
+
+    def test_validation_corpus_has_reasonable_size(self) -> None:
+        text = VALIDATION_PATH.read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(len(text), 1400)
+        self.assertLessEqual(len(text), 2100)
 
     def test_character_coverage_file_has_all_arabic_forms(self) -> None:
         text = COVERAGE_PATH.read_text(encoding="utf-8")
@@ -67,7 +74,7 @@ class CorpusTests(unittest.TestCase):
         validation = VALIDATION_PATH.read_text(encoding="utf-8")
 
         unseen = _words(validation) - _words(training)
-        self.assertGreaterEqual(len(unseen), 8)
+        self.assertGreaterEqual(len(unseen), 12)
 
     def test_validation_characters_exist_in_training_or_coverage(self) -> None:
         training = TRAINING_PATH.read_text(encoding="utf-8")
