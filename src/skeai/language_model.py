@@ -91,7 +91,7 @@ class TinyCharacterLanguageModel:
     def normalize_prompt(text: str) -> str:
         """Normalize short prompts for deterministic memory lookup."""
         normalized = unicodedata.normalize("NFKC", text).strip().casefold()
-        normalized = re.sub(r"[\\s\\u200f\\u200e]+", " ", normalized)
+        normalized = re.sub(r"[\s\u200f\u200e]+", " ", normalized)
         normalized = re.sub(r"[!؟?.,،؛;:]+", " ", normalized)
         return normalized.strip()
 
