@@ -3656,7 +3656,6 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             ? PySequence_Fast_ITEMS(weights_batch)
             : nullptr;
 
-    PyObject* sequence_length_object = nullptr;
     PyObject* vocabulary_object = nullptr;
     PyObject* context_object = nullptr;
     PyObject* d_model_object = nullptr;
@@ -3708,9 +3707,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                 );
             }
 
-            if (sequence_length_object == nullptr) {
-                sequence_length_object =
-                    PyLong_FromSsize_t(sequence_length);
+            if (vocabulary_object == nullptr) {
                 vocabulary_object =
                     PyLong_FromSsize_t(vocabulary_size);
                 context_object =
@@ -3726,8 +3723,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                 learning_rate_object =
                     PyFloat_FromDouble(learning_rate);
 
-                if (sequence_length_object == nullptr ||
-                    vocabulary_object == nullptr ||
+                if (vocabulary_object == nullptr ||
                     context_object == nullptr ||
                     d_model_object == nullptr ||
                     heads_object == nullptr ||
@@ -3738,17 +3734,17 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                     Py_DECREF(target_fast);
                     throw std::bad_alloc();
                 }
-            } else {
-                const Py_ssize_t expected_length =
-                    PyLong_AsSsize_t(sequence_length_object);
+            }
 
-                if (sequence_length != expected_length) {
-                    Py_DECREF(input_fast);
-                    Py_DECREF(target_fast);
-                    throw std::runtime_error(
-                        "all batch sequences must have the same length"
-                    );
-                }
+            // Each sequence may have its own length. Native train_step already
+            // accepts any length in [1, context_length], so the batch wrapper
+            // must not force unrelated response windows to share a length.
+            PyObject* current_sequence_length =
+                PyLong_FromSsize_t(sequence_length);
+            if (current_sequence_length == nullptr) {
+                Py_DECREF(input_fast);
+                Py_DECREF(target_fast);
+                throw std::bad_alloc();
             }
 
             // cpp_transformer_train_step owns no Python state beyond the
@@ -3784,8 +3780,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             PyTuple_SET_ITEM(step_args, 7, feed_forward_object);
             Py_INCREF(layers_object);
             PyTuple_SET_ITEM(step_args, 8, layers_object);
-            Py_INCREF(sequence_length_object);
-            PyTuple_SET_ITEM(step_args, 9, sequence_length_object);
+            PyTuple_SET_ITEM(step_args, 9, current_sequence_length);
             Py_INCREF(learning_rate_object);
             PyTuple_SET_ITEM(step_args, 10, learning_rate_object);
 
@@ -3839,7 +3834,6 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             }
         }
     } catch (const std::bad_alloc&) {
-        Py_XDECREF(sequence_length_object);
         Py_XDECREF(vocabulary_object);
         Py_XDECREF(context_object);
         Py_XDECREF(d_model_object);
@@ -3853,7 +3847,6 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         PyErr_NoMemory();
         return nullptr;
     } catch (const std::exception& exc) {
-        Py_XDECREF(sequence_length_object);
         Py_XDECREF(vocabulary_object);
         Py_XDECREF(context_object);
         Py_XDECREF(d_model_object);
