@@ -160,8 +160,6 @@ def main() -> None:
         description="Train SkeAI Level 2 Transformer."
     )
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--max-train-steps", type=int, default=200)
-    parser.add_argument("--max-validation-steps", type=int, default=50)
     parser.add_argument("--dialogue-repeat", type=int, default=12)
     parser.add_argument("--context", type=int, default=48)
     parser.add_argument("--vocab", type=int, default=512)
@@ -177,10 +175,6 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
-    if args.epochs <= 0 or args.max_train_steps <= 0:
-        raise ValueError("epochs and max-train-steps must be positive.")
-    if args.max_validation_steps <= 0:
-        raise ValueError("max-validation-steps must be positive.")
     if args.dialogue_repeat <= 0:
         raise ValueError("dialogue-repeat must be positive.")
     if args.patience < 0:
@@ -326,15 +320,13 @@ def main() -> None:
     print("matrix_backend=cpp")
 
     for epoch in range(1, args.epochs + 1):
-        order = list(range(len(training_pool)))
-        rng.shuffle(order)
+        # Always train on the complete training pool.
+        # The corpus is the source of truth; no subset of samples is selected.
+        selected = list(training_pool)
+        rng.shuffle(selected)
 
-        selected = [
-            training_pool[index]
-            for index in order[:args.max_train_steps]
-        ]
         if not selected:
-            raise RuntimeError("No training samples selected for epoch.")
+            raise RuntimeError("No training samples available for epoch.")
 
         steps_this_epoch = len(selected)
         epoch_start = time.perf_counter()
@@ -346,19 +338,14 @@ def main() -> None:
 
         language_validation_total = 0.0
         language_validation_count = 0
-        for index in range(
-            min(args.max_validation_steps, len(validation_samples))
-        ):
-            inputs, targets = validation_samples[index]
+        # Evaluate the complete validation corpus as well.
+        for inputs, targets in validation_samples:
             language_validation_total += trainer.evaluate(inputs, targets)
             language_validation_count += 1
 
         dialogue_validation_total = 0.0
         dialogue_validation_count = 0
-        for index in range(
-            min(args.max_validation_steps, len(dialogue_validation_samples))
-        ):
-            inputs, targets = dialogue_validation_samples[index]
+        for inputs, targets in dialogue_validation_samples:
             dialogue_validation_total += trainer.evaluate(inputs, targets)
             dialogue_validation_count += 1
 
