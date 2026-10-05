@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, List
 
+from .. import engine
 from ..tensor import Tensor
 
 
@@ -104,11 +105,10 @@ def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
         raise ValueError("matmul requires non-empty matrices.")
     if len(a[0]) != len(b):
         raise ValueError("Incompatible matrix shapes.")
-    bt = _transpose(b)
-    return [
-        [sum(x * y for x, y in zip(row, column)) for column in bt]
-        for row in a
-    ]
+
+    left = Tensor(a)
+    right = Tensor(b)
+    return left.matmul(right).to_list()
 
 
 def _add(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
@@ -174,28 +174,44 @@ def _softmax_backward(
     probabilities: list[list[float]],
     dprobabilities: list[list[float]],
 ) -> list[list[float]]:
-    result: list[list[float]] = []
-    for probs, dprobs in zip(probabilities, dprobabilities):
-        dot = sum(p * dp for p, dp in zip(probs, dprobs))
-        result.append([
-            p * (dp - dot)
-            for p, dp in zip(probs, dprobs)
-        ])
-    return result
+    if not probabilities or not dprobabilities:
+        raise ValueError("softmax backward requires non-empty matrices.")
+    if len(probabilities) != len(dprobabilities):
+        raise ValueError("softmax backward row counts must match.")
+    if len(probabilities[0]) != len(dprobabilities[0]):
+        raise ValueError("softmax backward column counts must match.")
+
+    probability_tensor = Tensor(probabilities)
+    gradient_tensor = Tensor(dprobabilities)
+    storage = engine.softmax_backward(
+        probability_tensor._storage,
+        gradient_tensor._storage,
+        len(probabilities),
+        len(probabilities[0]),
+    )
+    return Tensor._from_storage(
+        storage,
+        (len(probabilities), len(probabilities[0])),
+    ).to_list()
 
 
 def _causal_softmax(values: list[list[float]]) -> list[list[float]]:
-    result: list[list[float]] = []
-    for row_index, row in enumerate(values):
-        masked = [
-            value if column <= row_index else -1e30
-            for column, value in enumerate(row)
-        ]
-        maximum = max(masked)
-        exponentials = [math.exp(value - maximum) for value in masked]
-        total = sum(exponentials)
-        result.append([value / total for value in exponentials])
-    return result
+    if not values:
+        raise ValueError("causal softmax requires non-empty input.")
+    columns = len(values[0])
+    if columns <= 0 or any(len(row) != columns for row in values):
+        raise ValueError("causal softmax input must be rectangular.")
+
+    tensor = Tensor(values)
+    storage = engine.causal_softmax(
+        tensor._storage,
+        len(values),
+        columns,
+    )
+    return Tensor._from_storage(
+        storage,
+        (len(values), columns),
+    ).to_list()
 
 
 def _outer_accumulate(
