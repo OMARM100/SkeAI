@@ -1,7 +1,7 @@
-"""Basic neural-network layers for SkeAI 0.2.
+"""Basic neural-network layers for SkeAI 0.3.
 
-The layer math stays explicit and framework-free, while the common Dense
-forward/backward paths avoid unnecessary Tensor copies.
+Common training paths reuse validated buffers and perform their math directly
+against internal storage to reduce Python object allocation overhead.
 """
 
 from __future__ import annotations
@@ -34,7 +34,41 @@ class Dense:
             [[0.0 for _ in range(output_size)] for _ in range(input_size)]
         )
         self.grad_bias = Tensor([0.0 for _ in range(output_size)])
+
         self._cached_input: Tensor | None = None
+        self._cached_output: Tensor | None = None
+        self._cached_grad_input: Tensor | None = None
+
+        self._parameter_cache = {
+            "weights": self.weights,
+            "bias": self.bias,
+        }
+        self._gradient_cache = {
+            "weights": self.grad_weights,
+            "bias": self.grad_bias,
+        }
+
+    def _ensure_output_buffers(self, batch_size: int) -> None:
+        output_size = self.weights.shape[1]
+        input_size = self.weights.shape[0]
+
+        if self._cached_output is None or self._cached_output.shape != (
+            batch_size,
+            output_size,
+        ):
+            self._cached_output = Tensor._from_data(
+                [[0.0] * output_size for _ in range(batch_size)],
+                (batch_size, output_size),
+            )
+
+        if self._cached_grad_input is None or self._cached_grad_input.shape != (
+            batch_size,
+            input_size,
+        ):
+            self._cached_grad_input = Tensor._from_data(
+                [[0.0] * input_size for _ in range(batch_size)],
+                (batch_size, input_size),
+            )
 
     def forward(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 2 or inputs.shape[1] != self.weights.shape[0]:
@@ -42,18 +76,31 @@ class Dense:
                 "Dense.forward expects [batch, input_size] tensor."
             )
 
-        result = inputs.matmul(self.weights)
+        batch_size, input_size = inputs.shape
+        output_size = self.weights.shape[1]
+        self._ensure_output_buffers(batch_size)
 
-        # Add bias in-place. Avoid to_list() + a second Tensor allocation.
-        result_data = result._data  # type: ignore[attr-defined]
-        bias_data = self.bias._data  # type: ignore[attr-defined]
+        x = inputs._data  # type: ignore[attr-defined]
+        w = self.weights._data  # type: ignore[attr-defined]
+        b = self.bias._data  # type: ignore[attr-defined]
+        result = self._cached_output._data  # type: ignore[union-attr]
 
-        for row in result_data:
-            for index in range(len(row)):
-                row[index] += bias_data[index]
+        # Reuse the output buffer and compute matrix multiplication directly.
+        # The loop order keeps each weight row contiguous.
+        for batch in range(batch_size):
+            x_row = x[batch]
+            result_row = result[batch]
+            for input_index in range(input_size):
+                value = x_row[input_index]
+                w_row = w[input_index]
+                for output_index in range(output_size):
+                    result_row[output_index] += value * w_row[output_index]
+
+            for output_index in range(output_size):
+                result_row[output_index] += b[output_index]
 
         self._cached_input = inputs
-        return result
+        return self._cached_output
 
     def backward(self, grad_output: Tensor) -> Tensor:
         if self._cached_input is None:
@@ -66,57 +113,64 @@ class Dense:
         if grad_output.shape[0] != inputs.shape[0]:
             raise ValueError("Batch size mismatch in Dense.backward.")
 
-        x = inputs._data  # type: ignore[attr-defined]
-        go = grad_output._data  # type: ignore[attr-defined]
-        w = self.weights._data  # type: ignore[attr-defined]
-
         batch_size, input_size = inputs.shape
         _, output_size = grad_output.shape
 
-        grad_w = [
-            [0.0 for _ in range(output_size)]
-            for _ in range(input_size)
-        ]
-        grad_b = [0.0 for _ in range(output_size)]
-        grad_x = [
-            [0.0 for _ in range(input_size)]
-            for _ in range(batch_size)
-        ]
+        self._ensure_output_buffers(batch_size)
 
-        # One explicit hot loop computes grad_W, grad_b and grad_X together.
-        # This avoids repeated nested sums and repeated list traversal.
-        for batch in range(batch_size):
-            x_row = x[batch]
-            go_row = go[batch]
-            gx_row = grad_x[batch]
+        x = inputs._data  # type: ignore[attr-defined]
+        go = grad_output._data  # type: ignore[attr-defined]
+        w = self.weights._data  # type: ignore[attr-defined]
+        grad_w = self.grad_weights._data  # type: ignore[attr-defined]
+        grad_b = self.grad_bias._data  # type: ignore[attr-defined]
+        grad_x = self._cached_grad_input._data  # type: ignore[union-attr]
 
+        # Clear reusable gradient buffers.
+        for input_index in range(input_size):
+            grad_w_row = grad_w[input_index]
             for output_index in range(output_size):
-                gradient = go_row[output_index]
-                grad_b[output_index] += gradient
+                grad_w_row[output_index] = 0.0
 
-                for input_index in range(input_size):
-                    grad_w[input_index][output_index] += (
-                        x_row[input_index] * gradient
-                    )
-                    gx_row[input_index] += (
-                        gradient * w[input_index][output_index]
+        for output_index in range(output_size):
+            grad_b[output_index] = 0.0
+
+        for batch in range(batch_size):
+            go_row = go[batch]
+            for output_index in range(output_size):
+                grad_b[output_index] += go_row[output_index]
+
+        # grad_W = X^T @ grad_output.
+        # For each input row we keep the destination gradient row contiguous.
+        for input_index in range(input_size):
+            grad_w_row = grad_w[input_index]
+            for batch in range(batch_size):
+                x_value = x[batch][input_index]
+                go_row = go[batch]
+                for output_index in range(output_size):
+                    grad_w_row[output_index] += (
+                        x_value * go_row[output_index]
                     )
 
-        self.grad_weights = Tensor(grad_w)
-        self.grad_bias = Tensor(grad_b)
-        return Tensor(grad_x)
+        # grad_X = grad_output @ W^T.
+        # Each weight row is contiguous in memory for the inner loop.
+        for batch in range(batch_size):
+            go_row = go[batch]
+            grad_x_row = grad_x[batch]
+
+            for input_index in range(input_size):
+                weight_row = w[input_index]
+                total = 0.0
+                for output_index in range(output_size):
+                    total += go_row[output_index] * weight_row[output_index]
+                grad_x_row[input_index] = total
+
+        return self._cached_grad_input
 
     def parameters(self) -> Dict[str, Tensor]:
-        return {
-            "weights": self.weights,
-            "bias": self.bias,
-        }
+        return self._parameter_cache
 
     def gradients(self) -> Dict[str, Tensor]:
-        return {
-            "weights": self.grad_weights,
-            "bias": self.grad_bias,
-        }
+        return self._gradient_cache
 
 
 class ReLU:
@@ -124,10 +178,31 @@ class ReLU:
 
     def __init__(self) -> None:
         self._cached_input: Tensor | None = None
+        self._cached_output: Tensor | None = None
+        self._cached_gradient: Tensor | None = None
 
     def forward(self, inputs: Tensor) -> Tensor:
+        if self._cached_output is None or self._cached_output.shape != inputs.shape:
+            self._cached_output = Tensor._from_data(
+                [
+                    [0.0] * inputs.shape[1]
+                    for _ in range(inputs.shape[0])
+                ],
+                inputs.shape,
+            )
+
+        input_data = inputs._data  # type: ignore[attr-defined]
+        output_data = self._cached_output._data  # type: ignore[attr-defined]
+
+        for row_index in range(inputs.shape[0]):
+            input_row = input_data[row_index]
+            output_row = output_data[row_index]
+            for col_index in range(inputs.shape[1]):
+                value = input_row[col_index]
+                output_row[col_index] = value if value > 0.0 else 0.0
+
         self._cached_input = inputs
-        return inputs.map(lambda value: max(0.0, value))
+        return self._cached_output
 
     def backward(self, grad_output: Tensor) -> Tensor:
         if self._cached_input is None:
@@ -136,18 +211,31 @@ class ReLU:
         if grad_output.shape != self._cached_input.shape:
             raise ValueError("Gradient shape must match the cached input.")
 
-        return Tensor(
-            [
+        if self._cached_gradient is None or self._cached_gradient.shape != grad_output.shape:
+            self._cached_gradient = Tensor._from_data(
                 [
-                    grad if value > 0.0 else 0.0
-                    for value, grad in zip(input_row, grad_row)
-                ]
-                for input_row, grad_row in zip(
-                    self._cached_input.to_list(),
-                    grad_output.to_list(),
+                    [0.0] * grad_output.shape[1]
+                    for _ in range(grad_output.shape[0])
+                ],
+                grad_output.shape,
+            )
+
+        input_data = self._cached_input._data  # type: ignore[attr-defined]
+        grad_data = grad_output._data  # type: ignore[attr-defined]
+        output_data = self._cached_gradient._data  # type: ignore[attr-defined]
+
+        for row_index in range(grad_output.shape[0]):
+            input_row = input_data[row_index]
+            grad_row = grad_data[row_index]
+            output_row = output_data[row_index]
+            for col_index in range(grad_output.shape[1]):
+                output_row[col_index] = (
+                    grad_row[col_index]
+                    if input_row[col_index] > 0.0
+                    else 0.0
                 )
-            ]
-        )
+
+        return self._cached_gradient
 
 
 class Tanh:
@@ -155,11 +243,28 @@ class Tanh:
 
     def __init__(self) -> None:
         self._cached_output: Tensor | None = None
+        self._cached_gradient: Tensor | None = None
 
     def forward(self, inputs: Tensor) -> Tensor:
-        output = inputs.map(math.tanh)
-        self._cached_output = output
-        return output
+        if self._cached_output is None or self._cached_output.shape != inputs.shape:
+            self._cached_output = Tensor._from_data(
+                [
+                    [0.0] * inputs.shape[1]
+                    for _ in range(inputs.shape[0])
+                ],
+                inputs.shape,
+            )
+
+        input_data = inputs._data  # type: ignore[attr-defined]
+        output_data = self._cached_output._data  # type: ignore[attr-defined]
+
+        for row_index in range(inputs.shape[0]):
+            input_row = input_data[row_index]
+            output_row = output_data[row_index]
+            for col_index in range(inputs.shape[1]):
+                output_row[col_index] = math.tanh(input_row[col_index])
+
+        return self._cached_output
 
     def backward(self, grad_output: Tensor) -> Tensor:
         if self._cached_output is None:
@@ -168,18 +273,30 @@ class Tanh:
         if grad_output.shape != self._cached_output.shape:
             raise ValueError("Gradient shape must match the cached output.")
 
-        return Tensor(
-            [
+        if self._cached_gradient is None or self._cached_gradient.shape != grad_output.shape:
+            self._cached_gradient = Tensor._from_data(
                 [
-                    grad * (1.0 - output_value * output_value)
-                    for output_value, grad in zip(output_row, grad_row)
-                ]
-                for output_row, grad_row in zip(
-                    self._cached_output.to_list(),
-                    grad_output.to_list(),
+                    [0.0] * grad_output.shape[1]
+                    for _ in range(grad_output.shape[0])
+                ],
+                grad_output.shape,
+            )
+
+        output_data = self._cached_output._data  # type: ignore[attr-defined]
+        grad_data = grad_output._data  # type: ignore[attr-defined]
+        result_data = self._cached_gradient._data  # type: ignore[attr-defined]
+
+        for row_index in range(grad_output.shape[0]):
+            output_row = output_data[row_index]
+            grad_row = grad_data[row_index]
+            result_row = result_data[row_index]
+            for col_index in range(grad_output.shape[1]):
+                output_value = output_row[col_index]
+                result_row[col_index] = (
+                    grad_row[col_index] * (1.0 - output_value * output_value)
                 )
-            ]
-        )
+
+        return self._cached_gradient
 
 
 __all__ = ["Dense", "ReLU", "Tanh"]
