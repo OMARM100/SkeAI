@@ -3861,7 +3861,6 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         return nullptr;
     }
 
-    Py_XDECREF(sequence_length_object);
     Py_XDECREF(vocabulary_object);
     Py_XDECREF(context_object);
     Py_XDECREF(d_model_object);
