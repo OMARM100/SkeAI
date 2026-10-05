@@ -8,6 +8,7 @@ from src.skeai.level2.trainer import Level2Trainer
 from src.skeai.loss import CrossEntropyLoss
 from src.skeai.optimizer import SGD
 from src.skeai.tensor import Tensor
+from src.skeai.level2.transformer import _causal_softmax, _softmax_backward
 
 
 class Level2TokenizerTests(unittest.TestCase):
@@ -63,6 +64,39 @@ class Level2TransformerTests(unittest.TestCase):
             seed=7,
         )
         return TinyTransformerLM(vocab_size=32, config=config)
+
+    def test_native_causal_softmax(self) -> None:
+        values = [
+            [1.0, 2.0, 3.0],
+            [0.0, 0.0, 0.0],
+            [3.0, 1.0, -2.0],
+        ]
+        result = _causal_softmax(values)
+
+        self.assertAlmostEqual(result[0][0], 1.0, places=12)
+        self.assertAlmostEqual(result[0][1], 0.0, places=12)
+        self.assertAlmostEqual(result[1][0], 0.5, places=12)
+        self.assertAlmostEqual(result[1][1], 0.5, places=12)
+        self.assertAlmostEqual(result[2][0], 0.8668133321973347, places=10)
+        self.assertAlmostEqual(result[2][1], 0.11731089783238801, places=10)
+        self.assertAlmostEqual(result[2][2], 0.015875770358277614, places=10)
+
+    def test_native_softmax_backward(self) -> None:
+        probabilities = [
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.0],
+        ]
+        gradients = [
+            [2.0, 3.0, 4.0],
+            [1.0, 3.0, 5.0],
+        ]
+        result = _softmax_backward(probabilities, gradients)
+
+        self.assertAlmostEqual(result[0][0], 0.0, places=12)
+        self.assertAlmostEqual(result[0][1], 0.0, places=12)
+        self.assertAlmostEqual(result[1][0], -0.5, places=12)
+        self.assertAlmostEqual(result[1][1], 0.5, places=12)
+        self.assertAlmostEqual(result[1][2], 0.0, places=12)
 
     def test_forward_shape(self) -> None:
         model = self.make_model()
