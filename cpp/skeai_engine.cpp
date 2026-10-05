@@ -2443,10 +2443,11 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     Py_ssize_t n_layers;
     Py_ssize_t sequence_length;
     double learning_rate;
+    PyObject* target_weights_object = nullptr;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnnd:transformer_train_step",
+        "OOOnnnnnnnd|O:transformer_train_step",
         &parameters_object,
         &token_ids_object,
         &target_ids_object,
@@ -2457,7 +2458,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         &feed_forward_size,
         &n_layers,
         &sequence_length,
-        &learning_rate
+        &learning_rate,
+        &target_weights_object
     )) {
         return nullptr;
     }
@@ -2531,6 +2533,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
 
     std::vector<int> token_ids;
     std::vector<int> target_ids;
+    std::vector<double> target_weights;
 
     PyObject* token_sequence = PySequence_Fast(
         token_ids_object,
@@ -2631,6 +2634,74 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
 
     Py_DECREF(token_sequence);
     Py_DECREF(target_sequence);
+
+    try {
+        target_weights.assign(
+            static_cast<std::size_t>(sequence_length),
+            1.0
+        );
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(parameters_sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    if (target_weights_object != nullptr &&
+        target_weights_object != Py_None) {
+        PyObject* weight_sequence = PySequence_Fast(
+            target_weights_object,
+            "target_weights must be a sequence of numbers"
+        );
+        if (weight_sequence == nullptr) {
+            Py_DECREF(parameters_sequence);
+            return nullptr;
+        }
+
+        const Py_ssize_t weight_count =
+            PySequence_Fast_GET_SIZE(weight_sequence);
+        if (weight_count != sequence_length) {
+            Py_DECREF(weight_sequence);
+            Py_DECREF(parameters_sequence);
+            PyErr_SetString(
+                PyExc_ValueError,
+                "target_weights length must match sequence_length"
+            );
+            return nullptr;
+        }
+
+        PyObject** weight_items = PySequence_Fast_ITEMS(weight_sequence);
+        for (Py_ssize_t index = 0; index < sequence_length; ++index) {
+            const double weight = PyFloat_AsDouble(weight_items[index]);
+            if (PyErr_Occurred() != nullptr ||
+                !std::isfinite(weight) ||
+                weight < 0.0) {
+                Py_DECREF(weight_sequence);
+                Py_DECREF(parameters_sequence);
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "target_weights must contain finite non-negative numbers"
+                );
+                return nullptr;
+            }
+            target_weights[static_cast<std::size_t>(index)] = weight;
+        }
+
+        Py_DECREF(weight_sequence);
+    }
+
+    double total_target_weight = 0.0;
+    for (double weight : target_weights) {
+        total_target_weight += weight;
+    }
+    if (!(total_target_weight > 0.0) ||
+        !std::isfinite(total_target_weight)) {
+        Py_DECREF(parameters_sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "target_weights must contain at least one positive value"
+        );
+        return nullptr;
+    }
 
     const std::size_t vocab =
         static_cast<std::size_t>(vocab_size);
@@ -3042,14 +3113,15 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             const double probability =
                 std::max(dlogits_row[target], 1e-12);
 
-            total_loss -= std::log(probability);
-            dlogits_row[target] -= 1.0;
+            const double weight = target_weights[row];
+            total_loss -= weight * std::log(probability);
+            dlogits_row[target] -= weight;
         }
 
-        const double inverse_length =
-            1.0 / static_cast<double>(length);
+        const double inverse_target_weight =
+            1.0 / total_target_weight;
         for (double& value : dlogits.values) {
-            value *= inverse_length;
+            value *= inverse_target_weight;
         }
         if (profile) {
             loss_ms += std::chrono::duration<double, std::milli>(
@@ -3479,7 +3551,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         }
 
         return PyFloat_FromDouble(
-            total_loss / static_cast<double>(length)
+            total_loss / total_target_weight
         );
     } catch (const std::bad_alloc&) {
         PyErr_NoMemory();
@@ -3502,10 +3574,11 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     Py_ssize_t feed_forward_size;
     Py_ssize_t n_layers;
     double learning_rate;
+    PyObject* weights_batch_object = nullptr;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnd:transformer_train_batch",
+        "OOOnnnnnnd|O:transformer_train_batch",
         &parameters_object,
         &inputs_object,
         &targets_object,
@@ -3515,7 +3588,8 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         &n_heads,
         &feed_forward_size,
         &n_layers,
-        &learning_rate
+        &learning_rate,
+        &weights_batch_object
     )) {
         return nullptr;
     }
@@ -3537,13 +3611,30 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         return nullptr;
     }
 
+    PyObject* weights_batch = nullptr;
+    if (weights_batch_object != nullptr &&
+        weights_batch_object != Py_None) {
+        weights_batch = PySequence_Fast(
+            weights_batch_object,
+            "target weights must be a sequence of weight sequences"
+        );
+        if (weights_batch == nullptr) {
+            Py_DECREF(input_batch);
+            Py_DECREF(target_batch);
+            return nullptr;
+        }
+    }
+
     const Py_ssize_t batch_size =
         PySequence_Fast_GET_SIZE(input_batch);
 
     if (batch_size <= 0 ||
-        PySequence_Fast_GET_SIZE(target_batch) != batch_size) {
+        PySequence_Fast_GET_SIZE(target_batch) != batch_size ||
+        (weights_batch != nullptr &&
+         PySequence_Fast_GET_SIZE(weights_batch) != batch_size)) {
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
+        Py_XDECREF(weights_batch);
         PyErr_SetString(
             PyExc_ValueError,
             "training batch must contain matching non-empty input/target sequences"
@@ -3555,6 +3646,10 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         PySequence_Fast_ITEMS(input_batch);
     PyObject** target_items =
         PySequence_Fast_ITEMS(target_batch);
+    PyObject** weight_items_batch =
+        weights_batch != nullptr
+            ? PySequence_Fast_ITEMS(weights_batch)
+            : nullptr;
 
     PyObject* sequence_length_object = nullptr;
     PyObject* vocabulary_object = nullptr;
@@ -3654,7 +3749,9 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             // cpp_transformer_train_step owns no Python state beyond the
             // parameter storages; build one native argument tuple and keep
             // the entire training loop inside C++.
-            PyObject* step_args = PyTuple_New(11);
+            PyObject* step_args = PyTuple_New(
+                weights_batch != nullptr ? 12 : 11
+            );
             if (step_args == nullptr) {
                 Py_DECREF(input_fast);
                 Py_DECREF(target_fast);
@@ -3686,6 +3783,30 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             PyTuple_SET_ITEM(step_args, 9, sequence_length_object);
             Py_INCREF(learning_rate_object);
             PyTuple_SET_ITEM(step_args, 10, learning_rate_object);
+
+            if (weights_batch != nullptr) {
+                PyObject* weight_sequence = PySequence_Fast(
+                    weight_items_batch[index],
+                    "batch target weights must contain numeric sequences"
+                );
+                if (weight_sequence == nullptr) {
+                    Py_DECREF(step_args);
+                    Py_DECREF(input_fast);
+                    Py_DECREF(target_fast);
+                    throw std::runtime_error(
+                        "invalid batch target weight sequence"
+                    );
+                }
+                PyObject* weight_list = PySequence_List(weight_sequence);
+                Py_DECREF(weight_sequence);
+                if (weight_list == nullptr) {
+                    Py_DECREF(step_args);
+                    Py_DECREF(input_fast);
+                    Py_DECREF(target_fast);
+                    throw std::bad_alloc();
+                }
+                PyTuple_SET_ITEM(step_args, 11, weight_list);
+            }
 
             // cpp_transformer_train_step uses the same verified native
             // implementation. This wrapper eliminates Python's per-step
@@ -3723,6 +3844,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         Py_XDECREF(learning_rate_object);
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
+        Py_XDECREF(weights_batch);
         PyErr_NoMemory();
         return nullptr;
     } catch (const std::exception& exc) {
@@ -3736,6 +3858,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         Py_XDECREF(learning_rate_object);
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
+        Py_XDECREF(weights_batch);
         PyErr_SetString(PyExc_RuntimeError, exc.what());
         return nullptr;
     }
@@ -3750,6 +3873,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     Py_XDECREF(learning_rate_object);
     Py_DECREF(input_batch);
     Py_DECREF(target_batch);
+    Py_XDECREF(weights_batch);
 
     return PyFloat_FromDouble(
         total_loss / static_cast<double>(batch_size)
