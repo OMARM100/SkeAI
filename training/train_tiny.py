@@ -216,9 +216,6 @@ def main() -> None:
             max_new_tokens=32,
             temperature=0.65,
             seed=1234,
-            top_k=8,
-            repetition_penalty=1.12,
-            no_repeat_ngram_size=3,
         )
         print(f"{prompt!r} -> {result}")
 
