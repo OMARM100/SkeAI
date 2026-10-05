@@ -57,7 +57,9 @@ class ConversationMemoryTests(unittest.TestCase):
 
         self.assertEqual(first, "رد تجريبي")
         self.assertEqual(second, "رد تجريبي")
-        self.assertIn("اسم المستخدم الذي تتذكره هو عمر", prompts[-1])
+        self.assertIn("حالة SkeAI:", prompts[-1])
+        self.assertIn("عمر", prompts[-1])
+        self.assertIn("أنا لست إنسانًا.", prompts[-1])
         self.assertIn("المستخدم: اسمي عمر", prompts[-1])
         self.assertIn("SkeAI: رد تجريبي", prompts[-1])
         self.assertEqual(saved.facts["user_name"], "عمر")
