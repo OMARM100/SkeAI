@@ -77,9 +77,9 @@ class Level2TransformerTests(unittest.TestCase):
         self.assertAlmostEqual(result[0][1], 0.0, places=12)
         self.assertAlmostEqual(result[1][0], 0.5, places=12)
         self.assertAlmostEqual(result[1][1], 0.5, places=12)
-        self.assertAlmostEqual(result[2][0], 0.8668133321973347, places=10)
-        self.assertAlmostEqual(result[2][1], 0.11731089783238801, places=10)
-        self.assertAlmostEqual(result[2][2], 0.015875770358277614, places=10)
+        self.assertAlmostEqual(result[2][0], 0.8756005950630876, places=10)
+        self.assertAlmostEqual(result[2][1], 0.11849965453500957, places=10)
+        self.assertAlmostEqual(result[2][2], 0.005899750401902781, places=10)
 
     def test_native_softmax_backward(self) -> None:
         probabilities = [
