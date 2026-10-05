@@ -26,4 +26,4 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Run Level 2 benchmark
-        run: python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16
+        run: python -m benchmarks.benchmark_level2 --steps 20 --batch-size 16 --batch-sizes 1,4,8,16,32
