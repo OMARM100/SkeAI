@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any, List
 
@@ -30,6 +32,7 @@ class TinyCharacterLanguageModel:
         self.tokenizer = tokenizer
         self.context_length = context_length
         self.hidden_size = hidden_size
+        self.response_memory: dict[str, str] = {}
 
         input_size = context_length * tokenizer.vocab_size
 
@@ -84,6 +87,53 @@ class TinyCharacterLanguageModel:
             self.encode_context_indices(token_ids),
             batch_size=1,
         )
+    @staticmethod
+    def normalize_prompt(text: str) -> str:
+        """Normalize short prompts for deterministic memory lookup."""
+        normalized = unicodedata.normalize("NFKC", text).strip().casefold()
+        normalized = re.sub(r"[\\s\\u200f\\u200e]+", " ", normalized)
+        normalized = re.sub(r"[!؟?.,،؛;:]+", " ", normalized)
+        return normalized.strip()
+
+    def set_response_memory(self, entries: dict[str, str]) -> None:
+        if not isinstance(entries, dict):
+            raise TypeError("response memory must be a dictionary")
+        self.response_memory = {
+            self.normalize_prompt(str(prompt)): str(response).strip()
+            for prompt, response in entries.items()
+            if str(prompt).strip() and str(response).strip()
+        }
+
+    def memorized_response(self, prompt: str) -> str | None:
+        key = self.normalize_prompt(prompt)
+        if not key:
+            return None
+        return self.response_memory.get(key)
+
+    def respond(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int = 64,
+        temperature: float = 0.65,
+        seed: int | None = 1234,
+    ) -> str:
+        """Return a memorized response when available, otherwise generate."""
+        memorized = self.memorized_response(prompt)
+        if memorized is not None:
+            return memorized
+        generated = self.generate(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            seed=seed,
+            top_k=6,
+            repetition_penalty=1.15,
+            no_repeat_ngram_size=3,
+        )
+        if generated.startswith(prompt):
+            return generated[len(prompt):].strip()
+        return generated.strip()
     @staticmethod
     def _argmax(values: List[float], candidates: List[int] | None = None) -> int:
         if candidates is None:
@@ -250,6 +300,7 @@ class TinyCharacterLanguageModel:
                     "vocabulary": self.tokenizer.id_to_token,
                 },
                 "state": self.network.state_dict(),
+                "response_memory": self.response_memory,
             },
         }
 
@@ -288,6 +339,10 @@ class TinyCharacterLanguageModel:
             hidden_size=int(model_data["hidden_size"]),
             seed=123,
         )
+
+        memory = model_data.get("response_memory", {})
+        if isinstance(memory, dict):
+            model.set_response_memory(memory)
 
         state = model_data.get("state")
         if not isinstance(state, dict):
