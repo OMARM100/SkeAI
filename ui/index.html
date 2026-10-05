@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkeAI</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div><h1>SkeAI</h1><p id="status">جاري تحميل النموذج...</p></div>
+      <span class="status-dot" aria-hidden="true"></span>
+    </header>
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="message assistant">
+        <div class="label">SkeAI</div>
+        <div class="bubble">أهلًا! اكتب رسالة وسأجرب الإجابة باستخدام النموذج الحالي.</div>
+      </div>
+    </section>
+    <form id="chat-form" class="composer">
+      <textarea id="message" rows="2" placeholder="اكتب رسالتك..." autocomplete="off"></textarea>
+      <button id="send" type="submit">إرسال</button>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
