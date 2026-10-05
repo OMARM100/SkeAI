@@ -2443,10 +2443,11 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     Py_ssize_t n_layers;
     Py_ssize_t sequence_length;
     double learning_rate;
+    double weight_decay;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnnd:transformer_train_step",
+        "OOOnnnnnnndd:transformer_train_step",
         &parameters_object,
         &token_ids_object,
         &target_ids_object,
@@ -2457,7 +2458,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         &feed_forward_size,
         &n_layers,
         &sequence_length,
-        &learning_rate
+        &learning_rate,
+        &weight_decay
     )) {
         return nullptr;
     }
@@ -2472,7 +2474,9 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         sequence_length > context_length ||
         d_model % n_heads != 0 ||
         !std::isfinite(learning_rate) ||
-        learning_rate <= 0.0) {
+        learning_rate <= 0.0 ||
+        !std::isfinite(weight_decay) ||
+        weight_decay < 0.0) {
         PyErr_SetString(
             PyExc_ValueError,
             "invalid transformer training dimensions or learning rate"
@@ -3413,7 +3417,9 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
                 }
 
                 storage->values[index] -=
-                    learning_rate * gradient[index];
+                    learning_rate *
+                    (gradient[index] +
+                     weight_decay * value);
             }
 
             for (double value : storage->values) {
@@ -3502,10 +3508,11 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     Py_ssize_t feed_forward_size;
     Py_ssize_t n_layers;
     double learning_rate;
+    double weight_decay;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnd:transformer_train_batch",
+        "OOOnnnnnndd:transformer_train_batch",
         &parameters_object,
         &inputs_object,
         &targets_object,
@@ -3515,7 +3522,8 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         &n_heads,
         &feed_forward_size,
         &n_layers,
-        &learning_rate
+        &learning_rate,
+        &weight_decay
     )) {
         return nullptr;
     }
@@ -3564,6 +3572,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     PyObject* feed_forward_object = nullptr;
     PyObject* layers_object = nullptr;
     PyObject* learning_rate_object = nullptr;
+    PyObject* weight_decay_object = nullptr;
 
     double total_loss = 0.0;
 
@@ -3625,8 +3634,18 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
                     PyLong_FromSsize_t(n_layers);
                 learning_rate_object =
                     PyFloat_FromDouble(learning_rate);
+                weight_decay_object =
+                    PyFloat_FromDouble(weight_decay);
 
                 if (sequence_length_object == nullptr ||
+                    vocabulary_object == nullptr ||
+                    context_object == nullptr ||
+                    d_model_object == nullptr ||
+                    heads_object == nullptr ||
+                    feed_forward_object == nullptr ||
+                    layers_object == nullptr ||
+                    learning_rate_object == nullptr ||
+                    weight_decay_object == nullptr) {
                     vocabulary_object == nullptr ||
                     context_object == nullptr ||
                     d_model_object == nullptr ||
@@ -3654,7 +3673,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             // cpp_transformer_train_step owns no Python state beyond the
             // parameter storages; build one native argument tuple and keep
             // the entire training loop inside C++.
-            PyObject* step_args = PyTuple_New(11);
+            PyObject* step_args = PyTuple_New(12);
             if (step_args == nullptr) {
                 Py_DECREF(input_fast);
                 Py_DECREF(target_fast);
@@ -3686,6 +3705,8 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
             PyTuple_SET_ITEM(step_args, 9, sequence_length_object);
             Py_INCREF(learning_rate_object);
             PyTuple_SET_ITEM(step_args, 10, learning_rate_object);
+            Py_INCREF(weight_decay_object);
+            PyTuple_SET_ITEM(step_args, 11, weight_decay_object);
 
             // cpp_transformer_train_step uses the same verified native
             // implementation. This wrapper eliminates Python's per-step
@@ -3721,6 +3742,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
         Py_XDECREF(feed_forward_object);
         Py_XDECREF(layers_object);
         Py_XDECREF(learning_rate_object);
+        Py_XDECREF(weight_decay_object);
         Py_DECREF(input_batch);
         Py_DECREF(target_batch);
         PyErr_NoMemory();
@@ -3748,6 +3770,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     Py_XDECREF(feed_forward_object);
     Py_XDECREF(layers_object);
     Py_XDECREF(learning_rate_object);
+    Py_XDECREF(weight_decay_object);
     Py_DECREF(input_batch);
     Py_DECREF(target_batch);
 
