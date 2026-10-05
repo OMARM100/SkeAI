@@ -78,7 +78,7 @@ class Trainer:
             loss_ms = 0.0
 
         gradient = self.loss.backward()
-        self.model.backward(gradient)
+        self.model.backward(gradient, compute_input_gradient=False)
 
         if self.enable_timing:
             backward_ms = (perf_counter() - stage_start) * 1000.0
