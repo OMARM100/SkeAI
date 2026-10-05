@@ -72,13 +72,7 @@ class Level2Trainer:
             and isinstance(self.optimizer, SGD)
             and getattr(self.optimizer, "weight_decay", 0.0) == 0.0
         ):
-            parameters = [
-                self.model.token_embedding,
-                self.model.position_embedding,
-            ]
-            for block in self.model.blocks:
-                parameters.extend(block.values())
-            parameters.append(self.model.lm_head)
+            parameters = list(self.model.parameters().values())
 
             return engine.transformer_train_batch(
                 [parameter._storage for parameter in parameters],
