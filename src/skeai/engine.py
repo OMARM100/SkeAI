@@ -223,6 +223,39 @@ def sgd_step(
     )
 
 
+def transformer_train_batch(
+    parameters: Sequence[Any],
+    inputs: Sequence[Sequence[int]],
+    targets: Sequence[Sequence[int]],
+    vocabulary_size: int,
+    context_length: int,
+    d_model: int,
+    n_heads: int,
+    feed_forward_size: int,
+    n_layers: int,
+    learning_rate: float,
+) -> float:
+    if len(inputs) != len(targets):
+        raise ValueError("inputs and targets batch sizes must match.")
+    if not inputs:
+        raise ValueError("training batch cannot be empty.")
+
+    return float(
+        _require_cpp().transformer_train_batch(
+            [parameter for parameter in parameters],
+            [list(sequence) for sequence in inputs],
+            [list(sequence) for sequence in targets],
+            int(vocabulary_size),
+            int(context_length),
+            int(d_model),
+            int(n_heads),
+            int(feed_forward_size),
+            int(n_layers),
+            float(learning_rate),
+        )
+    )
+
+
 def transformer_train_step(
     parameters: Sequence[Any],
     token_ids: Sequence[int],
@@ -291,6 +324,7 @@ __all__ = [
     "cross_entropy_forward",
     "sgd_step",
     "transformer_train_step",
+    "transformer_train_batch",
     "storage_from_flat",
     "storage_zeros",
     "storage_to_flat",
