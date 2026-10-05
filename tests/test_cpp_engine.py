@@ -25,6 +25,38 @@ class CppEngineTests(unittest.TestCase):
             [[19.0, 22.0], [43.0, 50.0]],
         )
 
+    def test_dense_indexed_forward_and_backward(self) -> None:
+        layer = Dense(4, 2, seed=1)
+        layer.weights = Tensor(
+            [
+                [0.5, 1.0],
+                [1.5, 2.0],
+                [2.5, 3.0],
+                [3.5, 4.0],
+            ]
+        )
+        layer.bias = Tensor([0.25, -0.5])
+        layer.grad_weights = Tensor.zeros((4, 2))
+        layer.grad_bias = Tensor.zeros((2,))
+
+        output = layer.forward_indexed([0, 3, 1, 2], batch_size=2)
+
+        self.assertEqual(
+            output.to_list(),
+            [[4.25, 4.5], [4.25, 4.5]],
+        )
+
+        gradient = layer.backward(
+            Tensor([[1.0, 2.0], [3.0, 4.0]]),
+            compute_input_gradient=False,
+        )
+
+        self.assertIsNone(gradient)
+        self.assertEqual(
+            layer.grad_weights.to_list(),
+            [[1.0, 2.0], [3.0, 4.0], [3.0, 4.0], [1.0, 2.0]],
+        )
+        self.assertEqual(layer.grad_bias.to_list(), [4.0, 6.0])
     def test_dense_forward_and_backward(self) -> None:
         layer = Dense(2, 2, seed=1)
         layer.weights = Tensor([[0.5, 1.0], [1.5, 2.0]])
