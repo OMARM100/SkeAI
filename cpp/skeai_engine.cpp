@@ -3222,6 +3222,272 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     }
 }
 
+
+PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
+    PyObject* parameters_object = nullptr;
+    PyObject* inputs_object = nullptr;
+    PyObject* targets_object = nullptr;
+    Py_ssize_t vocabulary_size;
+    Py_ssize_t context_length;
+    Py_ssize_t d_model;
+    Py_ssize_t n_heads;
+    Py_ssize_t feed_forward_size;
+    Py_ssize_t n_layers;
+    double learning_rate;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "OOOnnnnnnnd:transformer_train_batch",
+        &parameters_object,
+        &inputs_object,
+        &targets_object,
+        &vocabulary_size,
+        &context_length,
+        &d_model,
+        &n_heads,
+        &feed_forward_size,
+        &n_layers,
+        &learning_rate
+    )) {
+        return nullptr;
+    }
+
+    PyObject* input_batch = PySequence_Fast(
+        inputs_object,
+        "inputs must be a sequence of token sequences"
+    );
+    if (input_batch == nullptr) {
+        return nullptr;
+    }
+
+    PyObject* target_batch = PySequence_Fast(
+        targets_object,
+        "targets must be a sequence of token sequences"
+    );
+    if (target_batch == nullptr) {
+        Py_DECREF(input_batch);
+        return nullptr;
+    }
+
+    const Py_ssize_t batch_size =
+        PySequence_Fast_GET_SIZE(input_batch);
+
+    if (batch_size <= 0 ||
+        PySequence_Fast_GET_SIZE(target_batch) != batch_size) {
+        Py_DECREF(input_batch);
+        Py_DECREF(target_batch);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "training batch must contain matching non-empty input/target sequences"
+        );
+        return nullptr;
+    }
+
+    PyObject** input_items =
+        PySequence_Fast_ITEMS(input_batch);
+    PyObject** target_items =
+        PySequence_Fast_ITEMS(target_batch);
+
+    PyObject* sequence_length_object = nullptr;
+    PyObject* vocabulary_object = nullptr;
+    PyObject* context_object = nullptr;
+    PyObject* d_model_object = nullptr;
+    PyObject* heads_object = nullptr;
+    PyObject* feed_forward_object = nullptr;
+    PyObject* layers_object = nullptr;
+    PyObject* learning_rate_object = nullptr;
+
+    double total_loss = 0.0;
+
+    try {
+        for (Py_ssize_t index = 0; index < batch_size; ++index) {
+            PyObject* input_sequence = input_items[index];
+            PyObject* target_sequence = target_items[index];
+
+            PyObject* input_fast = PySequence_Fast(
+                input_sequence,
+                "batch inputs must contain integer sequences"
+            );
+            if (input_fast == nullptr) {
+                throw std::runtime_error(
+                    "invalid batch input sequence"
+                );
+            }
+
+            PyObject* target_fast = PySequence_Fast(
+                target_sequence,
+                "batch targets must contain integer sequences"
+            );
+            if (target_fast == nullptr) {
+                Py_DECREF(input_fast);
+                throw std::runtime_error(
+                    "invalid batch target sequence"
+                );
+            }
+
+            const Py_ssize_t sequence_length =
+                PySequence_Fast_GET_SIZE(input_fast);
+            const Py_ssize_t target_length =
+                PySequence_Fast_GET_SIZE(target_fast);
+
+            if (sequence_length <= 0 ||
+                target_length != sequence_length ||
+                sequence_length > context_length) {
+                Py_DECREF(input_fast);
+                Py_DECREF(target_fast);
+                throw std::runtime_error(
+                    "batch sequence lengths are invalid"
+                );
+            }
+
+            if (sequence_length_object == nullptr) {
+                sequence_length_object =
+                    PyLong_FromSsize_t(sequence_length);
+                vocabulary_object =
+                    PyLong_FromSsize_t(vocabulary_size);
+                context_object =
+                    PyLong_FromSsize_t(context_length);
+                d_model_object =
+                    PyLong_FromSsize_t(d_model);
+                heads_object =
+                    PyLong_FromSsize_t(n_heads);
+                feed_forward_object =
+                    PyLong_FromSsize_t(feed_forward_size);
+                layers_object =
+                    PyLong_FromSsize_t(n_layers);
+                learning_rate_object =
+                    PyFloat_FromDouble(learning_rate);
+
+                if (sequence_length_object == nullptr ||
+                    vocabulary_object == nullptr ||
+                    context_object == nullptr ||
+                    d_model_object == nullptr ||
+                    heads_object == nullptr ||
+                    feed_forward_object == nullptr ||
+                    layers_object == nullptr ||
+                    learning_rate_object == nullptr) {
+                    Py_DECREF(input_fast);
+                    Py_DECREF(target_fast);
+                    throw std::bad_alloc();
+                }
+            } else {
+                const Py_ssize_t expected_length =
+                    PyLong_AsSsize_t(sequence_length_object);
+
+                if (sequence_length != expected_length) {
+                    Py_DECREF(input_fast);
+                    Py_DECREF(target_fast);
+                    throw std::runtime_error(
+                        "all batch sequences must have the same length"
+                    );
+                }
+            }
+
+            // cpp_transformer_train_step owns no Python state beyond the
+            // parameter storages; build one native argument tuple and keep
+            // the entire training loop inside C++.
+            PyObject* step_args = PyTuple_New(11);
+            if (step_args == nullptr) {
+                Py_DECREF(input_fast);
+                Py_DECREF(target_fast);
+                throw std::bad_alloc();
+            }
+
+            Py_INCREF(parameters_object);
+            PyTuple_SET_ITEM(step_args, 0, parameters_object);
+
+            Py_INCREF(input_fast);
+            PyTuple_SET_ITEM(step_args, 1, input_fast);
+
+            Py_INCREF(target_fast);
+            PyTuple_SET_ITEM(step_args, 2, target_fast);
+
+            Py_INCREF(vocabulary_object);
+            PyTuple_SET_ITEM(step_args, 3, vocabulary_object);
+            Py_INCREF(context_object);
+            PyTuple_SET_ITEM(step_args, 4, context_object);
+            Py_INCREF(d_model_object);
+            PyTuple_SET_ITEM(step_args, 5, d_model_object);
+            Py_INCREF(heads_object);
+            PyTuple_SET_ITEM(step_args, 6, heads_object);
+            Py_INCREF(feed_forward_object);
+            PyTuple_SET_ITEM(step_args, 7, feed_forward_object);
+            Py_INCREF(layers_object);
+            PyTuple_SET_ITEM(step_args, 8, layers_object);
+            Py_INCREF(sequence_length_object);
+            PyTuple_SET_ITEM(step_args, 9, sequence_length_object);
+            Py_INCREF(learning_rate_object);
+            PyTuple_SET_ITEM(step_args, 10, learning_rate_object);
+
+            // cpp_transformer_train_step uses the same verified native
+            // implementation. This wrapper eliminates Python's per-step
+            // training loop without maintaining a second numerical path.
+            PyObject* result =
+                cpp_transformer_train_step(nullptr, step_args);
+
+            Py_DECREF(step_args);
+            Py_DECREF(input_fast);
+            Py_DECREF(target_fast);
+
+            if (result == nullptr) {
+                throw std::runtime_error(
+                    "native transformer train step failed"
+                );
+            }
+
+            total_loss += PyFloat_AsDouble(result);
+            Py_DECREF(result);
+
+            if (PyErr_Occurred() != nullptr) {
+                throw std::runtime_error(
+                    "native transformer batch loss conversion failed"
+                );
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        Py_XDECREF(sequence_length_object);
+        Py_XDECREF(vocabulary_object);
+        Py_XDECREF(context_object);
+        Py_XDECREF(d_model_object);
+        Py_XDECREF(heads_object);
+        Py_XDECREF(feed_forward_object);
+        Py_XDECREF(layers_object);
+        Py_XDECREF(learning_rate_object);
+        Py_DECREF(input_batch);
+        Py_DECREF(target_batch);
+        PyErr_NoMemory();
+        return nullptr;
+    } catch (const std::exception& exc) {
+        Py_XDECREF(sequence_length_object);
+        Py_XDECREF(vocabulary_object);
+        Py_XDECREF(context_object);
+        Py_XDECREF(d_model_object);
+        Py_XDECREF(heads_object);
+        Py_XDECREF(feed_forward_object);
+        Py_XDECREF(layers_object);
+        Py_XDECREF(learning_rate_object);
+        Py_DECREF(input_batch);
+        Py_DECREF(target_batch);
+        PyErr_SetString(PyExc_RuntimeError, exc.what());
+        return nullptr;
+    }
+
+    Py_XDECREF(sequence_length_object);
+    Py_XDECREF(vocabulary_object);
+    Py_XDECREF(context_object);
+    Py_XDECREF(d_model_object);
+    Py_XDECREF(heads_object);
+    Py_XDECREF(feed_forward_object);
+    Py_XDECREF(layers_object);
+    Py_XDECREF(learning_rate_object);
+    Py_DECREF(input_batch);
+    Py_DECREF(target_batch);
+
+    return PyFloat_FromDouble(
+        total_loss / static_cast<double>(batch_size)
+    );
+}
+
 PyMethodDef module_methods[] = {
     {"storage_from_flat", storage_from_flat, METH_VARARGS,
      "Create contiguous C++ storage."},
@@ -3277,6 +3543,8 @@ PyMethodDef module_methods[] = {
      "In-place SGD step."},
     {"transformer_train_step", cpp_transformer_train_step, METH_VARARGS,
      "Fused Level 2 Transformer forward, backward, and SGD step."},
+    {"transformer_train_batch", cpp_transformer_train_batch, METH_VARARGS,
+     "Fused Level 2 C++ training loop over a batch."},
     {nullptr, nullptr, 0, nullptr}
 };
 
