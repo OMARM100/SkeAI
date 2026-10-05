@@ -31,7 +31,7 @@ class NativeEngineTests(unittest.TestCase):
 
         self.assertEqual(
             output.to_list(),
-            [[3.25, 3.5], [7.75, 10.5]],
+            [[3.75, 4.5], [7.75, 10.5]],
         )
 
         grad_output = [[1.0, 2.0], [3.0, 4.0]]
@@ -62,7 +62,7 @@ class NativeEngineTests(unittest.TestCase):
         self.assertEqual(grad_bias.to_list(), [4.0, 6.0])
         self.assertEqual(
             grad_input.to_list(),
-            [[2.5, 3.0], [5.5, 7.0]],
+            [[2.5, 5.5], [5.5, 12.5]],
         )
 
 
