@@ -4,11 +4,20 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <vector>
 
 namespace {
+
+thread_local std::pmr::unsynchronized_pool_resource g_train_memory_pool;
+
+inline std::pmr::memory_resource* train_memory_resource() noexcept {
+    return &g_train_memory_pool;
+}
+
+using TrainBuffer = std::pmr::vector<double>;
 
 struct StorageObject {
     PyObject_HEAD
@@ -1983,12 +1992,15 @@ PyObject* cpp_sgd_step(PyObject*, PyObject* args) {
 struct TrainMatrix {
     std::size_t rows = 0;
     std::size_t cols = 0;
-    std::vector<double> values;
+    TrainBuffer values;
 
-    TrainMatrix() = default;
+    TrainMatrix()
+        : values(train_memory_resource()) {}
 
     TrainMatrix(std::size_t rows_, std::size_t cols_)
-        : rows(rows_), cols(cols_), values(rows_ * cols_, 0.0) {}
+        : rows(rows_),
+          cols(cols_),
+          values(rows_ * cols_, 0.0, train_memory_resource()) {}
 
     double* row_ptr(std::size_t row) {
         return values.data() + row * cols;
@@ -2010,8 +2022,8 @@ struct TrainMatrix {
 struct TrainLayerCache {
     TrainMatrix input;
     TrainMatrix norm_x;
-    std::vector<double> mean1;
-    std::vector<double> inv1;
+    TrainBuffer mean1;
+    TrainBuffer inv1;
     TrainMatrix q;
     TrainMatrix k;
     TrainMatrix v;
@@ -2020,8 +2032,8 @@ struct TrainLayerCache {
     TrainMatrix attention_output;
     TrainMatrix residual;
     TrainMatrix norm_residual;
-    std::vector<double> mean2;
-    std::vector<double> inv2;
+    TrainBuffer mean2;
+    TrainBuffer inv2;
     TrainMatrix hidden_pre;
     TrainMatrix hidden;
 };
@@ -2093,8 +2105,8 @@ TrainMatrix train_add(
 void train_layer_norm_forward(
     const TrainMatrix& input,
     TrainMatrix& output,
-    std::vector<double>& means,
-    std::vector<double>& inv_stds
+    TrainBuffer& means,
+    TrainBuffer& inv_stds
 ) {
     output = TrainMatrix(input.rows, input.cols);
     means.assign(input.rows, 0.0);
@@ -2133,8 +2145,8 @@ void train_layer_norm_forward(
 TrainMatrix train_layer_norm_backward(
     const TrainMatrix& gradient,
     const TrainMatrix& input,
-    const std::vector<double>& means,
-    const std::vector<double>& inv_stds
+    const TrainBuffer& means,
+    const TrainBuffer& inv_stds
 ) {
     if (gradient.rows != input.rows ||
         gradient.cols != input.cols ||
@@ -2369,7 +2381,7 @@ void train_add_inplace(
 }
 
 void train_accumulate_parameter_gradient(
-    std::vector<double>& gradient,
+    TrainBuffer& gradient,
     const TrainMatrix& value,
     double scale
 ) {
@@ -2645,13 +2657,14 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         }
     }
 
-    std::vector<std::vector<double>> parameter_gradients;
+    std::vector<TrainBuffer> parameter_gradients;
     try {
-        parameter_gradients.resize(expected_parameters);
+        parameter_gradients.reserve(expected_parameters);
         for (std::size_t index = 0;
              index < expected_parameters;
              ++index) {
-            parameter_gradients[index].assign(
+            parameter_gradients.emplace_back(train_memory_resource());
+            parameter_gradients.back().assign(
                 parameters[index]->values.size(),
                 0.0
             );
@@ -2703,12 +2716,30 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             TrainMatrix w1(d, ff);
             TrainMatrix w2(ff, d);
 
-            wq.values = wq_storage->values;
-            wk.values = wk_storage->values;
-            wv.values = wv_storage->values;
-            wo.values = wo_storage->values;
-            w1.values = w1_storage->values;
-            w2.values = w2_storage->values;
+            wq.values.assign(
+                wq_storage->values.begin(),
+                wq_storage->values.end()
+            );
+            wk.values.assign(
+                wk_storage->values.begin(),
+                wk_storage->values.end()
+            );
+            wv.values.assign(
+                wv_storage->values.begin(),
+                wv_storage->values.end()
+            );
+            wo.values.assign(
+                wo_storage->values.begin(),
+                wo_storage->values.end()
+            );
+            w1.values.assign(
+                w1_storage->values.begin(),
+                w1_storage->values.end()
+            );
+            w2.values.assign(
+                w2_storage->values.begin(),
+                w2_storage->values.end()
+            );
 
             TrainLayerCache& cache = caches[layer];
             cache.input = x;
@@ -2786,8 +2817,8 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
         }
 
         TrainMatrix final_norm;
-        std::vector<double> final_mean;
-        std::vector<double> final_inv;
+        TrainBuffer final_mean(train_memory_resource());
+        TrainBuffer final_inv(train_memory_resource());
         train_layer_norm_forward(
             x,
             final_norm,
@@ -3179,7 +3210,7 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
              parameter < expected_parameters;
              ++parameter) {
             StorageObject* storage = parameters[parameter];
-            std::vector<double>& gradient =
+            TrainBuffer& gradient =
                 parameter_gradients[parameter];
 
             for (std::size_t index = 0;
