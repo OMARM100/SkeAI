@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from .. import engine
 from ..loss import CrossEntropyLoss
 from ..optimizer import SGD
 from .transformer import TinyTransformerLM
@@ -31,6 +32,25 @@ class Level2Trainer:
             raise ValueError("inputs and targets must have the same length.")
         if not inputs:
             raise ValueError("training sequence cannot be empty.")
+
+        if (
+            engine.NATIVE_AVAILABLE
+            and isinstance(self.optimizer, SGD)
+            and getattr(self.optimizer, "weight_decay", 0.0) == 0.0
+        ):
+            parameters = list(self.model.parameters().values())
+            return engine.transformer_train_step(
+                [parameter._storage for parameter in parameters],
+                list(inputs),
+                list(targets),
+                self.model.vocab_size,
+                self.model.config.context_length,
+                self.model.config.d_model,
+                self.model.config.n_heads,
+                self.model.config.feed_forward_size,
+                self.model.config.n_layers,
+                self.optimizer.learning_rate,
+            )
 
         logits = self.model.forward(list(inputs))
         loss_value = self.loss.forward(logits, list(targets))
