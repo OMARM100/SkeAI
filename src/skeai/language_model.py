@@ -164,6 +164,12 @@ class TinyCharacterLanguageModel:
                 )
             }
 
+            blocked.update({
+                self.tokenizer.pad_id,
+                self.tokenizer.bos_id,
+                self.tokenizer.unk_id,
+            })
+
             allowed = [
                 token_id
                 for token_id in range(self.tokenizer.vocab_size)
