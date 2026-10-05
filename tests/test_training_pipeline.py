@@ -2,8 +2,10 @@ import unittest
 
 from src.skeai.level2.tokenizer import HybridTokenizer
 from training.train_level2 import (
+    _fixed_target_window,
     build_dialogue_samples,
     build_response_focused_samples,
+    make_samples,
     scheduled_learning_rate,
 )
 
@@ -44,18 +46,44 @@ class TrainingPipelineTests(unittest.TestCase):
         self.assertTrue(focused)
         self.assertTrue(
             all(
-                len(inputs) == 8
-                and len(targets) == 8
-                and len(weights) == 8
+                0 < len(inputs) <= 8
+                and len(inputs) == len(targets)
+                and len(weights) == len(targets)
                 for inputs, targets, weights in focused
             )
         )
         self.assertTrue(
             all(
-                any(weight > 0.0 for weight in weights)
+                any(weight == 1.0 for weight in weights)
+                and all(weight in (0.25, 1.0) for weight in weights)
                 for _, _, weights in focused
             )
         )
+
+    def test_fixed_target_window_keeps_early_response_context(self) -> None:
+        inputs, targets = _fixed_target_window(
+            list(range(20)),
+            target_index=4,
+            context_length=8,
+        )
+        self.assertEqual(inputs, [0, 1, 2, 3])
+        self.assertEqual(targets, [1, 2, 3, 4])
+
+        inputs, targets = _fixed_target_window(
+            list(range(20)),
+            target_index=15,
+            context_length=8,
+        )
+        self.assertEqual(inputs, list(range(7, 15)))
+        self.assertEqual(targets, list(range(8, 16)))
+
+    def test_next_token_samples_are_aligned(self) -> None:
+        tokens = list(range(30))
+        samples = make_samples(tokens, context_length=8, stride=3)
+        self.assertTrue(samples)
+        for inputs, targets in samples:
+            self.assertEqual(len(inputs), len(targets))
+            self.assertEqual(targets[:-1], inputs[1:])
 
     def test_learning_rate_warms_up_then_decays(self) -> None:
         values = [
