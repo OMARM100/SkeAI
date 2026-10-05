@@ -70,7 +70,6 @@ class SkeAIState:
         if payload.get("type") not in {"skeai_state", "skeai_conversation_memory"}:
             raise ValueError("Unsupported SkeAI state file.")
         if payload.get("type") == "skeai_conversation_memory":
-            # Migrate the previous memory format without losing conversations.
             state = cls()
             state.user_facts = {
                 str(k): str(v) for k, v in payload.get("facts", {}).items()
@@ -270,23 +269,51 @@ class SkeAIConversation:
         return "".join(parts)
 
     def _trim_to_context(self, prompt: str) -> str:
-        token_ids = self.tokenizer.encode(prompt)
         limit = self.model.config.context_length
-        if len(token_ids) <= limit:
-            return prompt
+        system_context = self._self_context()
+        system_tokens = self.tokenizer.encode(system_context)
+
+        # The self-model is mandatory context. Older dialogue is expendable.
+        if len(system_tokens) >= limit:
+            return self.tokenizer.decode(system_tokens[:limit], skip_special_tokens=False)
+
+        if not prompt.startswith(system_context):
+            # Defensive fallback for callers providing a custom prompt.
+            token_ids = self.tokenizer.encode(prompt)
+            if len(token_ids) <= limit:
+                return prompt
+            return self.tokenizer.decode(token_ids[-limit:], skip_special_tokens=False)
+
+        body = prompt[len(system_context):]
         marker = f"{USER_LABEL} "
-        chunks = prompt.split(marker)
-        current = chunks[-1]
+        chunks = [chunk for chunk in body.split(marker) if chunk]
+        if not chunks:
+            return system_context
+
+        current = marker + chunks[-1]
         current_tokens = self.tokenizer.encode(current)
-        if len(current_tokens) >= limit:
-            return self.tokenizer.decode(current_tokens[-limit:], skip_special_tokens=False)
-        kept = current
+
+        if len(system_tokens) + len(current_tokens) > limit:
+            # Keep the identity block and the current user turn whenever possible.
+            available = max(1, limit - len(system_tokens))
+            current_ids = self.tokenizer.encode(current)
+            return system_context + self.tokenizer.decode(
+                current_ids[-available:],
+                skip_special_tokens=False,
+            )
+
+        kept_reversed: list[str] = []
+        used = len(system_tokens) + len(current_tokens)
         for previous in reversed(chunks[:-1]):
-            candidate = marker + previous + kept
-            if len(self.tokenizer.encode(candidate)) > limit:
+            candidate = marker + previous
+            candidate_tokens = self.tokenizer.encode(candidate)
+            if used + len(candidate_tokens) > limit:
                 break
-            kept = candidate
-        return kept
+            kept_reversed.append(candidate)
+            used += len(candidate_tokens)
+
+        kept_reversed.reverse()
+        return system_context + "".join(kept_reversed) + current
 
     def chat(
         self,
