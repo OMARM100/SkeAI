@@ -25,6 +25,10 @@ class CorpusTests(unittest.TestCase):
         for character in ARABIC_LETTERS:
             self.assertIn(f"ـ{character}ـ", text)
 
+    def test_training_corpus_has_more_than_25000_characters(self) -> None:
+        text = TRAINING_PATH.read_text(encoding="utf-8")
+        self.assertGreater(len(text), 25_000)
+
     def test_validation_corpus_uses_known_training_characters(self) -> None:
         training = TRAINING_PATH.read_text(encoding="utf-8")
         validation = VALIDATION_PATH.read_text(encoding="utf-8")
