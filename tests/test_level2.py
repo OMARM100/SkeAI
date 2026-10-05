@@ -297,6 +297,52 @@ class Level2TransformerTests(unittest.TestCase):
 
         self.assertLess(final, initial)
 
+        
+    def test_weighted_training_ignores_zero_weight_targets(self) -> None:
+        config = TransformerConfig(
+            context_length=6,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=16,
+            n_layers=1,
+            max_vocab_size=16,
+            seed=23,
+        )
+        inputs = [1, 2, 1, 2, 1, 2]
+        targets_a = [7, 7, 2, 1, 2, 1]
+        targets_b = [6, 3, 2, 1, 2, 1]
+        weights = [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+
+        model_a = TinyTransformerLM(vocab_size=8, config=config)
+        model_b = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_a = Level2Trainer(
+            model=model_a,
+            optimizer=SGD(learning_rate=0.01),
+        )
+        trainer_b = Level2Trainer(
+            model=model_b,
+            optimizer=SGD(learning_rate=0.01),
+        )
+
+        loss_a = trainer_a.train_batch(
+            [inputs],
+            [targets_a],
+            [weights],
+        )
+        loss_b = trainer_b.train_batch(
+            [inputs],
+            [targets_b],
+            [weights],
+        )
+
+        self.assertAlmostEqual(loss_a, loss_b, places=10)
+
+        for parameter_a, parameter_b in zip(
+            model_a.parameters().values(),
+            model_b.parameters().values(),
+        ):
+            self.assertEqual(parameter_a.to_list(), parameter_b.to_list())
+
     def test_generation_supports_greedy_and_sampling(self) -> None:
         model = self.make_model()
         prompt = [1, 2, 3]
