@@ -118,20 +118,6 @@ def main() -> None:
         add_eos=True,
     )
 
-    train_samples = make_samples(
-        train_tokens,
-        args.context if not args.resume else max(1, args.context),
-        stride=max(1, args.context // 2),
-    )
-    validation_samples = make_samples(
-        validation_tokens,
-        args.context if not args.resume else max(1, args.context),
-        stride=max(1, args.context),
-    )
-
-    if not train_samples or not validation_samples:
-        raise ValueError("Corpus is too short for the selected context.")
-
     if args.resume:
         if not args.checkpoint.exists():
             raise FileNotFoundError(
@@ -154,6 +140,21 @@ def main() -> None:
         )
         model = TinyTransformerLM(tokenizer.vocab_size, config)
 
+    context_length = model.config.context_length
+    train_samples = make_samples(
+        train_tokens,
+        context_length,
+        stride=max(1, context_length // 2),
+    )
+    validation_samples = make_samples(
+        validation_tokens,
+        context_length,
+        stride=context_length,
+    )
+
+    if not train_samples or not validation_samples:
+        raise ValueError("Corpus is too short for the selected context.")
+
     trainer = Level2Trainer(
         model=model,
         optimizer=SGD(learning_rate=args.learning_rate),
@@ -171,7 +172,7 @@ def main() -> None:
     print(f"train_samples={len(train_samples)}")
     print(f"validation_samples={len(validation_samples)}")
     print(f"parameter_count={model.parameter_count()}")
-    print(f"context_length={model.config.context_length}")
+    print(f"context_length={context_length}")
     print(f"d_model={model.config.d_model}")
     print(f"heads={model.config.n_heads}")
     print(f"layers={model.config.n_layers}")
@@ -182,26 +183,6 @@ def main() -> None:
     print("matrix_backend=cpp")
 
     for epoch in range(1, args.epochs + 1):
-        context_length = model.config.context_length
-        if context_length != args.context and not args.resume:
-            raise RuntimeError("Model context does not match requested context.")
-
-        if args.resume:
-            train_samples = make_samples(
-                train_tokens,
-                context_length,
-                stride=max(1, context_length // 2),
-            )
-            validation_samples = make_samples(
-                validation_tokens,
-                context_length,
-                stride=context_length,
-            )
-            if not train_samples or not validation_samples:
-                raise ValueError(
-                    "Corpus is too short for the resumed model context."
-                )
-
         order = list(range(len(train_samples)))
         rng.shuffle(order)
 
