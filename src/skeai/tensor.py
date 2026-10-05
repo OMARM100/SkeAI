@@ -1,7 +1,8 @@
-"""Minimal tensor operations for SkeAI 0.2.
+"""Minimal tensor operations for SkeAI 0.3.
 
-The Tensor API stays deliberately small and framework-free. The main numerical
-hot path uses explicit loops to avoid generator and temporary-object overhead.
+The Tensor API stays deliberately small and framework-free. Internal hot paths
+can reuse already-validated buffers without paying the public constructor's
+normalization and shape-inference cost on every training step.
 """
 
 from __future__ import annotations
@@ -78,6 +79,19 @@ class Tensor:
         self._data = normalized
         self._shape = _infer_shape(normalized)  # type: ignore[arg-type]
 
+    @classmethod
+    def _from_data(cls, data: object, shape: Tuple[int, ...]) -> "Tensor":
+        """Build an internal tensor from already-valid floating-point data.
+
+        This private constructor intentionally skips recursive normalization and
+        shape inference. It is used only by engine hot paths that already know
+        the exact shape and data representation.
+        """
+        tensor = cls.__new__(cls)
+        tensor._data = data
+        tensor._shape = shape
+        return tensor
+
     @property
     def shape(self) -> Tuple[int, ...]:
         return self._shape
@@ -147,12 +161,7 @@ class Tensor:
         return Tensor(_map(self._data, lambda value: value / float(other)))  # type: ignore[arg-type]
 
     def matmul(self, other: "Tensor") -> "Tensor":
-        """Matrix multiplication for rank-2 tensors.
-
-        The implementation uses explicit accumulation loops instead of nested
-        comprehensions with generators. This keeps the hot path predictable
-        and avoids creating a generator for every output element.
-        """
+        """Matrix multiplication for rank-2 tensors."""
         if self.ndim != 2 or other.ndim != 2:
             raise ValueError("matmul currently requires two rank-2 tensors.")
 
@@ -176,7 +185,7 @@ class Tensor:
                 for col_index in range(cols):
                     result_row[col_index] += value * right_row[col_index]
 
-        return Tensor(result)  # type: ignore[arg-type]
+        return Tensor._from_data(result, (rows, cols))
 
     def transpose(self) -> "Tensor":
         if self.ndim != 2:
@@ -187,7 +196,7 @@ class Tensor:
             [self._data[row][col] for row in range(rows)]  # type: ignore[index]
             for col in range(cols)
         ]
-        return Tensor(data)  # type: ignore[arg-type]
+        return Tensor._from_data(data, (cols, rows))
 
     def map(self, function) -> "Tensor":
         return Tensor(_map(self._data, function))  # type: ignore[arg-type]
