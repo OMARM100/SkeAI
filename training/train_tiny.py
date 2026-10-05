@@ -99,8 +99,8 @@ def main() -> None:
         enable_timing=True,
     )
 
-    batches = dataset.all_batches(batch_size=BATCH_SIZE)
-    validation_batches = validation_dataset.all_batches(batch_size=BATCH_SIZE)
+    batches = dataset.all_indexed_batches(batch_size=BATCH_SIZE)
+    validation_batches = validation_dataset.all_indexed_batches(batch_size=BATCH_SIZE)
     setup_seconds = perf_counter() - setup_start
 
     print(
