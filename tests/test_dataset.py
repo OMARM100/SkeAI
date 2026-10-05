@@ -25,6 +25,22 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(inputs.shape[1], 4 * tokenizer.vocab_size)
         self.assertEqual(inputs.shape[0], len(targets))
 
+    def test_indexed_batches_are_compact(self) -> None:
+        tokenizer = CharacterTokenizer()
+        text = "hello مرحبا"
+        tokenizer.fit([text])
+
+        dataset = CharacterLanguageDataset(
+            text=text,
+            tokenizer=tokenizer,
+            context_length=4,
+        )
+
+        batch = dataset.all_indexed_batches(batch_size=3)[0]
+
+        self.assertEqual(batch.batch_size, len(batch.targets))
+        self.assertEqual(len(batch.indices), batch.batch_size * 4)
+        self.assertTrue(all(0 <= value < 4 * tokenizer.vocab_size for value in batch.indices))
     def test_invalid_context(self) -> None:
         tokenizer = CharacterTokenizer()
         tokenizer.fit(["hello"])
