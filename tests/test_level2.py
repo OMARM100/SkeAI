@@ -29,8 +29,8 @@ class Level2TokenizerTests(unittest.TestCase):
         tokenizer = HybridTokenizer()
         tokenizer.fit(["hello"], max_units=16, min_frequency=2)
 
-        encoded = tokenizer.encode("x")
-        self.assertEqual(tokenizer.decode(encoded), "x")
+        encoded = tokenizer.encode("h")
+        self.assertEqual(tokenizer.decode(encoded), "h")
 
     def test_save_and_load(self) -> None:
         tokenizer = HybridTokenizer()
