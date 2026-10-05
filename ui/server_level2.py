@@ -56,7 +56,7 @@ class SkeAILevel2Service:
             self.model,
             self.tokenizer,
             memory_path=memory_path,
-            max_history_turns=3,
+            max_history_turns=5,
         )
         self.lock = threading.Lock()
 
@@ -75,6 +75,10 @@ class SkeAILevel2Service:
             "parameter_count": self.model.parameter_count(),
             "conversation_turns": len(self.conversation.memory.turns),
             "remembered_facts": self.conversation.memory.facts,
+            "self_model": self.conversation.memory.state.self_model,
+            "conversation_topic": self.conversation.memory.state.conversation_topic,
+            "current_goal": self.conversation.memory.state.current_goal,
+            "experience_count": len(self.conversation.memory.state.experiences),
         }
 
     def chat(
