@@ -214,44 +214,67 @@ static PyObject *native_dense_forward(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    double *result_data = PyMem_Calloc(
+        (size_t)(batch_size * output_size),
+        sizeof(double)
+    );
+    if (result_data == NULL) {
+        return PyErr_NoMemory();
+    }
+
     for (Py_ssize_t batch = 0; batch < batch_size; ++batch) {
         PyObject *x_row = PyList_GET_ITEM(inputs, batch);
-        PyObject *result_row = PyList_GET_ITEM(output, batch);
 
-        for (Py_ssize_t col = 0; col < output_size; ++col) {
-            double total;
-            if (!get_double(PyList_GET_ITEM(bias, col), &total)) {
+        for (Py_ssize_t input_index = 0; input_index < input_size; ++input_index) {
+            double x_value;
+            if (!get_double(
+                PyList_GET_ITEM(x_row, input_index),
+                &x_value
+            )) {
+                PyMem_Free(result_data);
                 return NULL;
             }
 
-            for (Py_ssize_t input_index = 0; input_index < input_size; ++input_index) {
-                double x_value;
+            PyObject *weight_row = PyList_GET_ITEM(weights, input_index);
+
+            for (Py_ssize_t col = 0; col < output_size; ++col) {
                 double weight_value;
-
-                if (!get_double(
-                    PyList_GET_ITEM(x_row, input_index),
-                    &x_value
-                )) {
-                    return NULL;
-                }
-
-                PyObject *weight_row = PyList_GET_ITEM(weights, input_index);
                 if (!get_double(
                     PyList_GET_ITEM(weight_row, col),
                     &weight_value
                 )) {
+                    PyMem_Free(result_data);
                     return NULL;
                 }
 
-                total += x_value * weight_value;
+                result_data[batch * output_size + col] +=
+                    x_value * weight_value;
+            }
+        }
+    }
+
+    for (Py_ssize_t batch = 0; batch < batch_size; ++batch) {
+        PyObject *result_row = PyList_GET_ITEM(output, batch);
+
+        for (Py_ssize_t col = 0; col < output_size; ++col) {
+            double bias_value;
+            if (!get_double(PyList_GET_ITEM(bias, col), &bias_value)) {
+                PyMem_Free(result_data);
+                return NULL;
             }
 
-            if (!set_double(result_row, col, total)) {
+            if (!set_double(
+                result_row,
+                col,
+                result_data[batch * output_size + col] + bias_value
+            )) {
+                PyMem_Free(result_data);
                 return NULL;
             }
         }
     }
 
+    PyMem_Free(result_data);
     Py_RETURN_NONE;
 }
 
@@ -331,7 +354,6 @@ static PyObject *native_dense_backward(PyObject *self, PyObject *args) {
     }
 
     for (Py_ssize_t batch = 0; batch < batch_size; ++batch) {
-        PyObject *x_row = PyList_GET_ITEM(inputs, batch);
         PyObject *go_row = PyList_GET_ITEM(grad_output, batch);
 
         for (Py_ssize_t col = 0; col < output_size; ++col) {
@@ -342,14 +364,33 @@ static PyObject *native_dense_backward(PyObject *self, PyObject *args) {
                 PyMem_Free(grad_x);
                 return NULL;
             }
-
             grad_b[col] += go_value;
+        }
+    }
 
-            for (Py_ssize_t input_index = 0; input_index < input_size; ++input_index) {
-                double x_value;
+    for (Py_ssize_t batch = 0; batch < batch_size; ++batch) {
+        PyObject *x_row = PyList_GET_ITEM(inputs, batch);
+        PyObject *go_row = PyList_GET_ITEM(grad_output, batch);
+
+        for (Py_ssize_t input_index = 0; input_index < input_size; ++input_index) {
+            double x_value;
+            if (!get_double(
+                PyList_GET_ITEM(x_row, input_index),
+                &x_value
+            )) {
+                PyMem_Free(grad_w);
+                PyMem_Free(grad_b);
+                PyMem_Free(grad_x);
+                return NULL;
+            }
+
+            PyObject *weight_row = PyList_GET_ITEM(weights, input_index);
+
+            for (Py_ssize_t col = 0; col < output_size; ++col) {
+                double go_value;
                 if (!get_double(
-                    PyList_GET_ITEM(x_row, input_index),
-                    &x_value
+                    PyList_GET_ITEM(go_row, col),
+                    &go_value
                 )) {
                     PyMem_Free(grad_w);
                     PyMem_Free(grad_b);
@@ -362,8 +403,6 @@ static PyObject *native_dense_backward(PyObject *self, PyObject *args) {
 
                 if (compute_input_gradient) {
                     double weight_value;
-                    PyObject *weight_row = PyList_GET_ITEM(weights, input_index);
-
                     if (!get_double(
                         PyList_GET_ITEM(weight_row, col),
                         &weight_value
