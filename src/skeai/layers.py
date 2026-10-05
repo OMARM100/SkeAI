@@ -162,16 +162,23 @@ class Dense:
 
             for input_index in input_range:
                 x_value = x_row[input_index]
-                weight_row = w[input_index]
                 grad_w_row = grad_w[input_index]
-                total = 0.0
 
-                for output_index in output_range:
-                    grad_value = go_row[output_index]
-                    grad_w_row[output_index] += x_value * grad_value
-                    total += grad_value * weight_row[output_index]
+                if compute_input_gradient:
+                    weight_row = w[input_index]
+                    total = 0.0
 
-                grad_x_row[input_index] = total
+                    for output_index in output_range:
+                        grad_value = go_row[output_index]
+                        grad_w_row[output_index] += x_value * grad_value
+                        total += grad_value * weight_row[output_index]
+
+                    grad_x_row[input_index] = total
+                else:
+                    for output_index in output_range:
+                        grad_w_row[output_index] += (
+                            x_value * go_row[output_index]
+                        )
 
         return self._cached_grad_input
 
