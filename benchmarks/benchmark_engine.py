@@ -16,6 +16,7 @@ from time import perf_counter
 
 from src.skeai.benchmark import benchmark
 from src.skeai.dataset import CharacterLanguageDataset
+from src.skeai.engine import BACKEND_NAME
 from src.skeai.language_model import TinyCharacterLanguageModel
 from src.skeai.layers import Dense
 from src.skeai.loss import CrossEntropyLoss
@@ -218,6 +219,7 @@ def main() -> None:
     print("=== SkeAI Engine Benchmark ===")
     print(f"python={platform.python_version()}")
     print(f"platform={platform.platform()}")
+    print(f"engine_backend={BACKEND_NAME}")
 
     left = make_matrix(16, 256)
     right = make_matrix(256, 64)
