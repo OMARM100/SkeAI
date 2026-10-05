@@ -1,13 +1,13 @@
-"""Minimal tensor operations for SkeAI 0.1.
+"""Minimal tensor operations for SkeAI 0.2.
 
-This module intentionally avoids NumPy/PyTorch. It provides the small set of
-numeric operations we need while the project is learning the fundamentals.
+The Tensor API stays deliberately small and framework-free. The main numerical
+hot path uses explicit loops to avoid generator and temporary-object overhead.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Iterable, List, Sequence, Tuple, Union
+from typing import List, Sequence, Tuple, Union
 
 Number = Union[int, float]
 NestedNumbers = Union[Number, Sequence["NestedNumbers"]]
@@ -147,7 +147,12 @@ class Tensor:
         return Tensor(_map(self._data, lambda value: value / float(other)))  # type: ignore[arg-type]
 
     def matmul(self, other: "Tensor") -> "Tensor":
-        """Matrix multiplication for rank-2 tensors."""
+        """Matrix multiplication for rank-2 tensors.
+
+        The implementation uses explicit accumulation loops instead of nested
+        comprehensions with generators. This keeps the hot path predictable
+        and avoids creating a generator for every output element.
+        """
         if self.ndim != 2 or other.ndim != 2:
             raise ValueError("matmul currently requires two rank-2 tensors.")
 
@@ -160,13 +165,16 @@ class Tensor:
         left = self._data
         right = other._data
 
-        result = [
-            [
-                sum(float(left[i][k]) * float(right[k][j]) for k in range(inner))
-                for j in range(cols)
-            ]
-            for i in range(rows)
-        ]
+        result = [[0.0] * cols for _ in range(rows)]
+
+        for row_index in range(rows):
+            left_row = left[row_index]  # type: ignore[index]
+            result_row = result[row_index]
+            for inner_index in range(inner):
+                value = left_row[inner_index]
+                right_row = right[inner_index]  # type: ignore[index]
+                for col_index in range(cols):
+                    result_row[col_index] += value * right_row[col_index]
 
         return Tensor(result)  # type: ignore[arg-type]
 
