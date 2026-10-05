@@ -99,8 +99,28 @@ class Dense:
             for input_index in range(input_size):
                 value = x_row[input_index]
                 w_row = w[input_index]
-                for output_index in range(output_size):
+
+                output_index = 0
+                unrolled_limit = output_size - (output_size % 4)
+
+                while output_index < unrolled_limit:
+                    result_row[output_index] += (
+                        value * w_row[output_index]
+                    )
+                    result_row[output_index + 1] += (
+                        value * w_row[output_index + 1]
+                    )
+                    result_row[output_index + 2] += (
+                        value * w_row[output_index + 2]
+                    )
+                    result_row[output_index + 3] += (
+                        value * w_row[output_index + 3]
+                    )
+                    output_index += 4
+
+                while output_index < output_size:
                     result_row[output_index] += value * w_row[output_index]
+                    output_index += 1
 
             for output_index in range(output_size):
                 result_row[output_index] += b[output_index]
@@ -168,17 +188,59 @@ class Dense:
                     weight_row = w[input_index]
                     total = 0.0
 
-                    for output_index in output_range:
+                    output_index = 0
+                    unrolled_limit = output_size - (output_size % 4)
+
+                    while output_index < unrolled_limit:
                         grad_value = go_row[output_index]
                         grad_w_row[output_index] += x_value * grad_value
                         total += grad_value * weight_row[output_index]
 
+                        grad_value = go_row[output_index + 1]
+                        grad_w_row[output_index + 1] += x_value * grad_value
+                        total += grad_value * weight_row[output_index + 1]
+
+                        grad_value = go_row[output_index + 2]
+                        grad_w_row[output_index + 2] += x_value * grad_value
+                        total += grad_value * weight_row[output_index + 2]
+
+                        grad_value = go_row[output_index + 3]
+                        grad_w_row[output_index + 3] += x_value * grad_value
+                        total += grad_value * weight_row[output_index + 3]
+
+                        output_index += 4
+
+                    while output_index < output_size:
+                        grad_value = go_row[output_index]
+                        grad_w_row[output_index] += x_value * grad_value
+                        total += grad_value * weight_row[output_index]
+                        output_index += 1
+
                     grad_x_row[input_index] = total
                 else:
-                    for output_index in output_range:
+                    output_index = 0
+                    unrolled_limit = output_size - (output_size % 4)
+
+                    while output_index < unrolled_limit:
                         grad_w_row[output_index] += (
                             x_value * go_row[output_index]
                         )
+                        grad_w_row[output_index + 1] += (
+                            x_value * go_row[output_index + 1]
+                        )
+                        grad_w_row[output_index + 2] += (
+                            x_value * go_row[output_index + 2]
+                        )
+                        grad_w_row[output_index + 3] += (
+                            x_value * go_row[output_index + 3]
+                        )
+                        output_index += 4
+
+                    while output_index < output_size:
+                        grad_w_row[output_index] += (
+                            x_value * go_row[output_index]
+                        )
+                        output_index += 1
 
         return self._cached_grad_input
 
