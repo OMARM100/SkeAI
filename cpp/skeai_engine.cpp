@@ -3237,7 +3237,7 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnnd:transformer_train_batch",
+        "OOOnnnnnnd:transformer_train_batch",
         &parameters_object,
         &inputs_object,
         &targets_object,
