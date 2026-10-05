@@ -397,6 +397,7 @@ class TinyTransformerLM:
 
         cache = self._last_cache
         grads = gradients or self.gradients()
+        scale = 1.0 / math.sqrt(self.head_dim)
         dlogits_values = dlogits.to_list()
         final_norm = cache["final_norm"]
         lm_head = self.lm_head.to_list()
@@ -564,58 +565,6 @@ class TinyTransformerLM:
             ]
             for position, token_id in enumerate(token_ids)
         ])
-
-    def forward(self, token_ids: List[int]) -> Tensor:
-        if any(token_id < 0 or token_id >= self.vocab_size for token_id in token_ids):
-            raise ValueError("Token ID out of range.")
-
-        x = self._embed(token_ids)
-        scale = 1.0 / math.sqrt(self.head_dim)
-
-        for block in self.blocks:
-            norm_x = _layer_norm(x)
-            q = norm_x.matmul(block["wq"])
-            k = norm_x.matmul(block["wk"])
-            v = norm_x.matmul(block["wv"])
-
-            # One attention stream per head. The tensors stay small enough that
-            # the existing C++ matmul kernel remains useful.
-            attended_heads: List[Tensor] = []
-            q_values = q.to_list()
-            k_values = k.to_list()
-            v_values = v.to_list()
-
-            for head in range(self.config.n_heads):
-                start = head * self.head_dim
-                end = start + self.head_dim
-                qh = Tensor([row[start:end] for row in q_values])
-                kh = Tensor([row[start:end] for row in k_values])
-                vh = Tensor([row[start:end] for row in v_values])
-
-                scores = qh.matmul(kh.transpose()) * scale
-                probs = _softmax_rows(scores, mask_causal=True)
-                attended_heads.append(probs.matmul(vh))
-
-            seq = len(token_ids)
-            merged: List[List[float]] = []
-            for row in range(seq):
-                merged.append(
-                    [
-                        float(head.to_list()[row][col])
-                        for head in attended_heads
-                        for col in range(self.head_dim)
-                    ]
-                )
-
-            attention_output = Tensor(merged).matmul(block["wo"])
-            x = x + attention_output
-
-            ff_input = _layer_norm(x)
-            hidden = _relu(ff_input.matmul(block["w1"]))
-            x = x + hidden.matmul(block["w2"])
-
-        x = _layer_norm(x)
-        return x.matmul(self.lm_head)
 
     def next_logits(self, token_ids: List[int]) -> List[float]:
         return self.forward(token_ids).to_list()[-1]
