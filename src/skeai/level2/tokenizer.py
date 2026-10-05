@@ -85,28 +85,39 @@ class HybridTokenizer:
             character_counts.update(text)
 
         # Character fallback is always included so unseen words remain encodable.
-        candidates: List[str] = [
+        unit_candidates = [
             token
             for token, count in unit_counts.items()
             if count >= min_frequency
         ]
-        candidates.sort(key=lambda token: (-unit_counts[token], token))
+        unit_candidates.sort(key=lambda token: (-unit_counts[token], token))
 
-        for character, count in character_counts.items():
-            if count >= min_frequency:
-                candidates.append(character)
+        # Character fallback gets priority so every character seen in the
+        # training corpus remains representable by the Level 2 tokenizer.
+        character_candidates = sorted(character_counts, key=ord)
 
         seen = set(self.id_to_token)
         added = 0
-        for token in candidates:
+
+        for token in character_candidates:
             if token in seen:
                 continue
+            if added >= max_units:
+                break
             self.id_to_token.append(token)
             self.token_to_id[token] = len(self.id_to_token) - 1
             seen.add(token)
             added += 1
+
+        for token in unit_candidates:
+            if token in seen:
+                continue
             if added >= max_units:
                 break
+            self.id_to_token.append(token)
+            self.token_to_id[token] = len(self.id_to_token) - 1
+            seen.add(token)
+            added += 1
 
     def encode(
         self,
