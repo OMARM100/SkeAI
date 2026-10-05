@@ -324,10 +324,11 @@ class TinyTransformerLM:
                 kh = [row[start:end] for row in k]
                 vh = [row[start:end] for row in v]
 
-                kt = _transpose(kh)
+                # Q @ K^T gives one score for every query/key pair.
+                scores = _matmul(qh, _transpose(kh))
                 scores = [
-                    [sum(a * b for a, b in zip(q_row, k_col)) * scale for k_col in kt]
-                    for q_row in qh
+                    [value * scale for value in row]
+                    for row in scores
                 ]
                 probs = _causal_softmax(scores)
                 attended = _matmul(probs, vh)
