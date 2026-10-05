@@ -2443,11 +2443,11 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
     Py_ssize_t n_layers;
     Py_ssize_t sequence_length;
     double learning_rate;
-    double weight_decay;
+    double weight_decay = 0.0;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnnndd:transformer_train_step",
+        "OOOnnnnnnnd|d:transformer_train_step",
         &parameters_object,
         &token_ids_object,
         &target_ids_object,
@@ -3508,11 +3508,11 @@ PyObject* cpp_transformer_train_batch(PyObject*, PyObject* args) {
     Py_ssize_t feed_forward_size;
     Py_ssize_t n_layers;
     double learning_rate;
-    double weight_decay;
+    double weight_decay = 0.0;
 
     if (!PyArg_ParseTuple(
         args,
-        "OOOnnnnnndd:transformer_train_batch",
+        "OOOnnnnnnd|d:transformer_train_batch",
         &parameters_object,
         &inputs_object,
         &targets_object,
