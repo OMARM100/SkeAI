@@ -1,14 +1,14 @@
-"""Basic neural-network layers for SkeAI 0.1.
+"""Basic neural-network layers for SkeAI 0.2.
 
-The implementation is deliberately small and explicit. It uses SkeAI's own
-Tensor class instead of a machine-learning framework.
+The layer math stays explicit and framework-free, while the common Dense
+forward/backward paths avoid unnecessary Tensor copies.
 """
 
 from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Tuple
+from typing import Dict
 
 from .tensor import Tensor
 
@@ -43,15 +43,17 @@ class Dense:
             )
 
         result = inputs.matmul(self.weights)
-        bias = self.bias.to_list()
-        result_data = result.to_list()
+
+        # Add bias in-place. Avoid to_list() + a second Tensor allocation.
+        result_data = result._data  # type: ignore[attr-defined]
+        bias_data = self.bias._data  # type: ignore[attr-defined]
 
         for row in result_data:
-            for index in range(len(row)):  # type: ignore[arg-type]
-                row[index] += bias[index]  # type: ignore[index]
+            for index in range(len(row)):
+                row[index] += bias_data[index]
 
         self._cached_input = inputs
-        return Tensor(result_data)  # type: ignore[arg-type]
+        return result
 
     def backward(self, grad_output: Tensor) -> Tensor:
         if self._cached_input is None:
@@ -64,39 +66,41 @@ class Dense:
         if grad_output.shape[0] != inputs.shape[0]:
             raise ValueError("Batch size mismatch in Dense.backward.")
 
-        x = inputs.to_list()
-        go = grad_output.to_list()
-        w = self.weights.to_list()
+        x = inputs._data  # type: ignore[attr-defined]
+        go = grad_output._data  # type: ignore[attr-defined]
+        w = self.weights._data  # type: ignore[attr-defined]
 
         batch_size, input_size = inputs.shape
         _, output_size = grad_output.shape
 
         grad_w = [
-            [
-                sum(
-                    x[batch][input_index] * go[batch][output_index]
-                    for batch in range(batch_size)
-                )
-                for output_index in range(output_size)
-            ]
-            for input_index in range(input_size)
+            [0.0 for _ in range(output_size)]
+            for _ in range(input_size)
         ]
-
-        grad_b = [
-            sum(go[batch][output_index] for batch in range(batch_size))
-            for output_index in range(output_size)
-        ]
-
+        grad_b = [0.0 for _ in range(output_size)]
         grad_x = [
-            [
-                sum(
-                    go[batch][output_index] * w[input_index][output_index]
-                    for output_index in range(output_size)
-                )
-                for input_index in range(input_size)
-            ]
-            for batch in range(batch_size)
+            [0.0 for _ in range(input_size)]
+            for _ in range(batch_size)
         ]
+
+        # One explicit hot loop computes grad_W, grad_b and grad_X together.
+        # This avoids repeated nested sums and repeated list traversal.
+        for batch in range(batch_size):
+            x_row = x[batch]
+            go_row = go[batch]
+            gx_row = grad_x[batch]
+
+            for output_index in range(output_size):
+                gradient = go_row[output_index]
+                grad_b[output_index] += gradient
+
+                for input_index in range(input_size):
+                    grad_w[input_index][output_index] += (
+                        x_row[input_index] * gradient
+                    )
+                    gx_row[input_index] += (
+                        gradient * w[input_index][output_index]
+                    )
 
         self.grad_weights = Tensor(grad_w)
         self.grad_bias = Tensor(grad_b)
