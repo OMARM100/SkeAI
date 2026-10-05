@@ -50,18 +50,13 @@ class SkeAIService:
             raise ValueError("temperature must be between 0 and 2")
 
         with self.lock:
-            generated = self.model.generate(
+            generated = self.model.respond(
                 message,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
-                seed=None,
-                top_k=8,
-                repetition_penalty=1.12,
-                no_repeat_ngram_size=3,
+                seed=1234,
             )
 
-        if generated.startswith(message):
-            return generated[len(message):]
         return generated
 
 
