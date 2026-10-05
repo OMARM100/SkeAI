@@ -1487,6 +1487,191 @@ PyObject* cpp_mse_backward(PyObject*, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+
+PyObject* cpp_causal_softmax(PyObject*, PyObject* args) {
+    PyObject* input_object = nullptr;
+    Py_ssize_t rows;
+    Py_ssize_t cols;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "Onn:causal_softmax",
+        &input_object,
+        &rows,
+        &cols
+    )) {
+        return nullptr;
+    }
+
+    if (rows < 0 || cols <= 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "causal softmax dimensions are invalid"
+        );
+        return nullptr;
+    }
+
+    StorageObject* input = as_storage(input_object);
+    if (input == nullptr) {
+        return nullptr;
+    }
+
+    std::size_t expected_size;
+    if (!checked_product(rows, cols, &expected_size)) {
+        return nullptr;
+    }
+
+    if (input->values.size() != expected_size) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "causal softmax buffer does not match the provided shape"
+        );
+        return nullptr;
+    }
+
+    StorageObject* output = create_storage(expected_size);
+    if (output == nullptr) {
+        return nullptr;
+    }
+
+    const std::size_t row_count = static_cast<std::size_t>(rows);
+    const std::size_t column_count = static_cast<std::size_t>(cols);
+
+    Py_BEGIN_ALLOW_THREADS
+
+    for (std::size_t row = 0; row < row_count; ++row) {
+        const double* input_row =
+            input->values.data() + row * column_count;
+        double* output_row =
+            output->values.data() + row * column_count;
+
+        const std::size_t last_allowed =
+            std::min(row, column_count - 1);
+
+        double maximum = input_row[0];
+        for (std::size_t column = 1;
+             column <= last_allowed;
+             ++column) {
+            maximum = std::max(maximum, input_row[column]);
+        }
+
+        double total = 0.0;
+        for (std::size_t column = 0;
+             column <= last_allowed;
+             ++column) {
+            const double value =
+                std::exp(input_row[column] - maximum);
+            output_row[column] = value;
+            total += value;
+        }
+
+        const double inverse_total = 1.0 / total;
+
+        for (std::size_t column = 0;
+             column <= last_allowed;
+             ++column) {
+            output_row[column] *= inverse_total;
+        }
+
+        for (std::size_t column = last_allowed + 1;
+             column < column_count;
+             ++column) {
+            output_row[column] = 0.0;
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+
+    return reinterpret_cast<PyObject*>(output);
+}
+
+PyObject* cpp_softmax_backward(PyObject*, PyObject* args) {
+    PyObject* probabilities_object = nullptr;
+    PyObject* gradient_object = nullptr;
+    Py_ssize_t rows;
+    Py_ssize_t cols;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "OOnn:softmax_backward",
+        &probabilities_object,
+        &gradient_object,
+        &rows,
+        &cols
+    )) {
+        return nullptr;
+    }
+
+    if (rows < 0 || cols <= 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "softmax backward dimensions are invalid"
+        );
+        return nullptr;
+    }
+
+    StorageObject* probabilities =
+        as_storage(probabilities_object);
+    StorageObject* gradient =
+        as_storage(gradient_object);
+
+    if (probabilities == nullptr || gradient == nullptr) {
+        return nullptr;
+    }
+
+    std::size_t expected_size;
+    if (!checked_product(rows, cols, &expected_size)) {
+        return nullptr;
+    }
+
+    if (probabilities->values.size() != expected_size ||
+        gradient->values.size() != expected_size) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "softmax backward buffers do not match the provided shape"
+        );
+        return nullptr;
+    }
+
+    StorageObject* output = create_storage(expected_size);
+    if (output == nullptr) {
+        return nullptr;
+    }
+
+    const std::size_t row_count = static_cast<std::size_t>(rows);
+    const std::size_t column_count = static_cast<std::size_t>(cols);
+
+    Py_BEGIN_ALLOW_THREADS
+
+    for (std::size_t row = 0; row < row_count; ++row) {
+        const double* probability_row =
+            probabilities->values.data() + row * column_count;
+        const double* gradient_row =
+            gradient->values.data() + row * column_count;
+        double* output_row =
+            output->values.data() + row * column_count;
+
+        double dot = 0.0;
+        for (std::size_t column = 0;
+             column < column_count;
+             ++column) {
+            dot += probability_row[column] * gradient_row[column];
+        }
+
+        for (std::size_t column = 0;
+             column < column_count;
+             ++column) {
+            output_row[column] =
+                probability_row[column] *
+                (gradient_row[column] - dot);
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+
+    return reinterpret_cast<PyObject*>(output);
+}
+
 PyObject* cpp_cross_entropy_forward(
     PyObject*,
     PyObject* args
@@ -1815,6 +2000,10 @@ PyMethodDef module_methods[] = {
      "Scalar tensor division."},
     {"matmul", cpp_matmul, METH_VARARGS,
      "Matrix multiplication."},
+    {"causal_softmax", cpp_causal_softmax, METH_VARARGS,
+     "Causal row-wise softmax kernel."},
+    {"softmax_backward", cpp_softmax_backward, METH_VARARGS,
+     "Softmax backward kernel."},
     {"transpose", cpp_transpose, METH_VARARGS,
      "Rank-2 transpose."},
     {"dense_forward", cpp_dense_forward, METH_VARARGS,
