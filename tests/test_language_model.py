@@ -40,7 +40,7 @@ class TinyLanguageModelTests(unittest.TestCase):
 
     def test_dynamic_time_response(self) -> None:
         response = self.model.respond("كم الساعة")
-        self.assertRegex(response, r"^الساعة الآن \\d{2}:\\d{2}\\.$")
+        self.assertRegex(response, r"^الساعة الآن \d{2}:\d{2}\.$")
 
     def test_invalid_generation_controls(self) -> None:
         with self.assertRaises(ValueError):
