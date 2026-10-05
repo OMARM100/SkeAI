@@ -145,7 +145,7 @@ class TinyCharacterLanguageModel:
                 best_score = score
                 best_response = response
 
-        if best_score >= 0.82:
+        if best_score >= 0.77:
             return best_response
         return None
 
