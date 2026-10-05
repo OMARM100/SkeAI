@@ -9,8 +9,8 @@ To continue training from the last checkpoint:
     python -m training.train_tiny --resume
 
 Use --epochs to control the number of training epochs. The default is 100.
-The script reports setup, training, checkpoint and total elapsed time so
-performance changes can be measured directly on the target device.
+The script reports training and held-out validation loss so we can distinguish
+actual generalization from memorization/overfitting.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from src.skeai.trainer import Trainer
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = ROOT / "data" / "samples" / "tiny_corpus.txt"
+VALIDATION_PATH = ROOT / "data" / "samples" / "tiny_validation.txt"
 CHECKPOINT_PATH = ROOT / "models" / "tiny_character_model.json"
 DEFAULT_EPOCHS = 100
 BATCH_SIZE = 16
@@ -77,10 +78,30 @@ def main() -> None:
 
     setup_start = perf_counter()
     text = CORPUS_PATH.read_text(encoding="utf-8")
+    validation_text = VALIDATION_PATH.read_text(encoding="utf-8")
     model = load_model(args.resume, text)
+
+    unknown_validation_characters = sorted(
+        {
+            character
+            for character in validation_text
+            if character not in model.tokenizer.token_to_id
+        },
+        key=ord,
+    )
+    if unknown_validation_characters:
+        raise ValueError(
+            "Validation corpus contains characters outside the training "
+            f"vocabulary: {unknown_validation_characters!r}"
+        )
 
     dataset = CharacterLanguageDataset(
         text=text,
+        tokenizer=model.tokenizer,
+        context_length=model.context_length,
+    )
+    validation_dataset = CharacterLanguageDataset(
+        text=validation_text,
         tokenizer=model.tokenizer,
         context_length=model.context_length,
     )
@@ -93,6 +114,7 @@ def main() -> None:
     )
 
     batches = dataset.all_batches(batch_size=BATCH_SIZE)
+    validation_batches = validation_dataset.all_batches(batch_size=BATCH_SIZE)
     total_training_steps = len(batches) * args.epochs
     setup_seconds = perf_counter() - setup_start
 
@@ -100,7 +122,8 @@ def main() -> None:
         f"training_plan=epochs:{args.epochs} "
         f"batches_per_epoch:{len(batches)} "
         f"total_steps:{total_training_steps} "
-        f"batch_size:{BATCH_SIZE}"
+        f"batch_size:{BATCH_SIZE} "
+        f"validation_examples:{len(validation_dataset)}"
     )
 
     def report(epoch: int, batch: int, loss: float) -> None:
@@ -110,15 +133,24 @@ def main() -> None:
                 f"loss={loss:.6f}"
             )
 
+    initial_validation_loss = trainer.evaluate_batches(validation_batches)
+    validation_history: list[float] = []
+
     def report_epoch(
         epoch: int,
         loss: float,
         elapsed_seconds: float,
         examples_per_second: float,
     ) -> None:
+        validation_loss = trainer.evaluate_batches(validation_batches)
+        validation_history.append(validation_loss)
         timing = trainer.last_step_timing
+
         print(
             f"epoch={epoch:03d} time={elapsed_seconds:.4f}s "
+            f"train_loss={loss:.6f} "
+            f"validation_loss={validation_loss:.6f} "
+            f"gap={validation_loss - loss:+.6f} "
             f"avg_step={trainer.last_epoch_timing['average_step_ms']:.3f}ms "
             f"examples/s={examples_per_second:.2f} "
             f"last_step=[forward:{timing['forward_ms']:.3f}ms "
@@ -141,14 +173,23 @@ def main() -> None:
     model.save_checkpoint(CHECKPOINT_PATH)
     checkpoint_seconds = perf_counter() - checkpoint_start
 
+    final_validation_loss = trainer.evaluate_batches(validation_batches)
     total_seconds = perf_counter() - total_start
 
     print(f"checkpoint={CHECKPOINT_PATH}")
     print(f"vocabulary_size={model.tokenizer.vocab_size}")
     print(f"training_examples={len(dataset)}")
+    print(f"validation_examples={len(validation_dataset)}")
     print(f"parameter_count={model.network.parameter_count()}")
     print(f"initial_loss={history[0]:.6f}")
     print(f"final_loss={history[-1]:.6f}")
+    print(f"initial_validation_loss={initial_validation_loss:.6f}")
+    print(f"final_validation_loss={final_validation_loss:.6f}")
+    print(f"best_validation_loss={min(validation_history):.6f}")
+    print(
+        "best_validation_epoch="
+        f"{validation_history.index(min(validation_history)) + 1}"
+    )
     print(f"setup_seconds={setup_seconds:.4f}")
     print(f"training_seconds={training_seconds:.4f}")
     print(f"checkpoint_seconds={checkpoint_seconds:.4f}")
