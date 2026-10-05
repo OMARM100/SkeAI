@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import time
 from pathlib import Path
@@ -131,6 +132,127 @@ def build_dialogue_samples(
     return samples
 
 
+def _fixed_target_window(
+    token_ids: list[int],
+    target_index: int,
+    context_length: int,
+) -> tuple[list[int], list[int]] | None:
+    # A response-focused example keeps the same fixed context size required by
+    # the fused native trainer, while choosing the final target around an
+    # assistant response token rather than an arbitrary corpus offset.
+    if context_length <= 0:
+        raise ValueError("context_length must be positive.")
+    if target_index < context_length or target_index >= len(token_ids):
+        return None
+
+    start = target_index - context_length
+    inputs = token_ids[start:target_index]
+    targets = token_ids[start + 1:target_index + 1]
+    if len(inputs) != context_length or len(targets) != context_length:
+        return None
+    return inputs, targets
+
+
+def build_response_focused_samples(
+    conversations: list[list[tuple[str, str]]],
+    tokenizer: HybridTokenizer,
+    context_length: int,
+) -> list[tuple[list[int], list[int]]]:
+    # The normal dialogue windows train the whole conversation stream. These
+    # additional windows deliberately end on assistant response tokens, so
+    # useful answer tokens receive more learning signal without changing the
+    # native trainer interface or introducing a second Python training path.
+    samples: list[tuple[list[int], list[int]]] = []
+
+    for conversation in conversations:
+        dialogue_lines = [TRAINING_SELF_CONTEXT]
+
+        for user, response in conversation:
+            prompt_text = "\\n".join(
+                [
+                    *dialogue_lines,
+                    f"{USER_LABEL} {user}",
+                    f"{ASSISTANT_LABEL} ",
+                ]
+            )
+            prefix_tokens = tokenizer.encode(
+                prompt_text,
+                add_bos=False,
+                add_eos=False,
+            )
+            response_tokens = tokenizer.encode(
+                response,
+                add_bos=False,
+                add_eos=False,
+            )
+            if not response_tokens:
+                continue
+
+            sequence = [
+                tokenizer.bos_id,
+                *prefix_tokens,
+                *response_tokens,
+                tokenizer.eos_id,
+            ]
+            response_start = 1 + len(prefix_tokens)
+            response_last = response_start + len(response_tokens) - 1
+
+            candidate_indices = {
+                response_start,
+                response_start + min(2, len(response_tokens) - 1),
+                response_start + min(5, len(response_tokens) - 1),
+                response_last,
+            }
+
+            for target_index in sorted(candidate_indices):
+                sample = _fixed_target_window(
+                    sequence,
+                    target_index,
+                    context_length,
+                )
+                if sample is not None:
+                    samples.append(sample)
+
+            dialogue_lines.extend(
+                [
+                    f"{USER_LABEL} {user}",
+                    f"{ASSISTANT_LABEL} {response}",
+                ]
+            )
+
+    return samples
+
+
+def scheduled_learning_rate(
+    base_learning_rate: float,
+    *,
+    epoch: int,
+    total_epochs: int,
+    warmup_epochs: int,
+    final_scale: float,
+) -> float:
+    if base_learning_rate <= 0.0:
+        raise ValueError("base_learning_rate must be positive.")
+    if epoch <= 0 or total_epochs <= 0:
+        raise ValueError("epoch and total_epochs must be positive.")
+    if warmup_epochs < 0:
+        raise ValueError("warmup_epochs cannot be negative.")
+    if not 0.0 < final_scale <= 1.0:
+        raise ValueError("final_scale must be in the interval (0, 1].")
+
+    if warmup_epochs > 0 and epoch <= warmup_epochs:
+        return base_learning_rate * (epoch / warmup_epochs)
+
+    decay_span = max(1, total_epochs - warmup_epochs)
+    progress = min(
+        1.0,
+        max(0.0, (epoch - warmup_epochs) / decay_span),
+    )
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    scale = final_scale + (1.0 - final_scale) * cosine
+    return base_learning_rate * scale
+
+
 def build_tokenizer(
     train_text: str,
     dialogue_texts: list[str],
@@ -161,6 +283,7 @@ def main() -> None:
     )
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--dialogue-repeat", type=int, default=12)
+    parser.add_argument("--response-focus-repeat", type=int, default=8)
     parser.add_argument("--context", type=int, default=48)
     parser.add_argument("--vocab", type=int, default=512)
     parser.add_argument("--d-model", type=int, default=32)
@@ -168,6 +291,8 @@ def main() -> None:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--ff", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=0.003)
+    parser.add_argument("--warmup-epochs", type=int, default=2)
+    parser.add_argument("--final-learning-rate-scale", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--min-delta", type=float, default=0.0005)
@@ -177,6 +302,12 @@ def main() -> None:
 
     if args.dialogue_repeat <= 0:
         raise ValueError("dialogue-repeat must be positive.")
+    if args.response_focus_repeat <= 0:
+        raise ValueError("response-focus-repeat must be positive.")
+    if args.warmup_epochs < 0:
+        raise ValueError("warmup-epochs cannot be negative.")
+    if not 0.0 < args.final_learning_rate_scale <= 1.0:
+        raise ValueError("final-learning-rate-scale must be in the interval (0, 1].")
     if args.patience < 0:
         raise ValueError("patience cannot be negative.")
     if args.min_delta < 0.0:
@@ -258,6 +389,11 @@ def main() -> None:
         tokenizer,
         context_length,
     )
+    response_focused_samples = build_response_focused_samples(
+        dialogue_conversations,
+        tokenizer,
+        context_length,
+    )
     validation_samples = make_samples(
         validation_tokens,
         context_length,
@@ -280,8 +416,15 @@ def main() -> None:
     # Dialogue examples are deliberately oversampled. This is the first
     # conversation milestone, so the model must spend meaningful training
     # capacity learning turn boundaries, identity, and short answers.
-    training_pool = language_samples + (
-        dialogue_samples * args.dialogue_repeat
+    language_training_steps = len(language_samples)
+    dialogue_training_steps = len(dialogue_samples) * args.dialogue_repeat
+    response_focused_training_steps = (
+        len(response_focused_samples) * args.response_focus_repeat
+    )
+    training_pool = (
+        language_samples
+        + (dialogue_samples * args.dialogue_repeat)
+        + (response_focused_samples * args.response_focus_repeat)
     )
 
     trainer = Level2Trainer(
@@ -303,8 +446,13 @@ def main() -> None:
     print(f"dialogue_validation_conversations={len(validation_dialogues)}")
     print(f"dialogue_pairs={sum(len(c) for c in dialogue_conversations)}")
     print(f"dialogue_samples={len(dialogue_samples)}")
+    print(f"response_focused_samples={len(response_focused_samples)}")
     print(f"dialogue_validation_samples={len(dialogue_validation_samples)}")
     print(f"dialogue_repeat={args.dialogue_repeat}")
+    print(f"response_focus_repeat={args.response_focus_repeat}")
+    print(f"language_training_steps={language_training_steps}")
+    print(f"dialogue_training_steps={dialogue_training_steps}")
+    print(f"response_focused_training_steps={response_focused_training_steps}")
     print(f"training_pool={len(training_pool)}")
     print(f"validation_samples={len(validation_samples)}")
     print(f"parameter_count={model.parameter_count()}")
@@ -314,12 +462,23 @@ def main() -> None:
     print(f"layers={model.config.n_layers}")
     print(f"feed_forward={model.config.feed_forward_size}")
     print(f"learning_rate={args.learning_rate}")
+    print(f"warmup_epochs={args.warmup_epochs}")
+    print(f"final_learning_rate_scale={args.final_learning_rate_scale}")
     print(f"patience={args.patience}")
     print("training_backend=cpp_batch_fused")
     print("attention_backend=cpp")
     print("matrix_backend=cpp")
 
     for epoch in range(1, args.epochs + 1):
+        epoch_learning_rate = scheduled_learning_rate(
+            args.learning_rate,
+            epoch=epoch,
+            total_epochs=args.epochs,
+            warmup_epochs=args.warmup_epochs,
+            final_scale=args.final_learning_rate_scale,
+        )
+        trainer.optimizer.learning_rate = epoch_learning_rate
+
         # Always train on the complete training pool.
         # The corpus is the source of truth; no subset of samples is selected.
         selected = list(training_pool)
@@ -376,6 +535,7 @@ def main() -> None:
 
         print(
             f"epoch={epoch} "
+            f"epoch_learning_rate={epoch_learning_rate:.8f} "
             f"train_loss={train_loss:.6f} "
             f"validation_loss={validation_loss:.6f} "
             f"language_validation_loss={language_validation_loss:.6f} "
@@ -395,7 +555,7 @@ def main() -> None:
 
     total_seconds = time.perf_counter() - started
     metadata: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "model": "level2_transformer",
         "training_backend": "cpp_batch_fused",
         "language_samples": len(language_samples),
@@ -403,10 +563,17 @@ def main() -> None:
         "dialogue_validation_conversations": len(validation_dialogues),
         "dialogue_pairs": sum(len(c) for c in dialogue_conversations),
         "dialogue_samples": len(dialogue_samples),
+        "response_focused_samples": len(response_focused_samples),
         "dialogue_validation_samples": len(dialogue_validation_samples),
         "language_validation_loss": language_validation_loss,
         "dialogue_validation_loss": dialogue_validation_loss,
         "dialogue_repeat": args.dialogue_repeat,
+        "response_focus_repeat": args.response_focus_repeat,
+        "language_training_steps": language_training_steps,
+        "dialogue_training_steps": dialogue_training_steps,
+        "response_focused_training_steps": response_focused_training_steps,
+        "warmup_epochs": args.warmup_epochs,
+        "final_learning_rate_scale": args.final_learning_rate_scale,
         "training_pool": len(training_pool),
         "completed_steps": completed_steps,
         "best_validation_loss": best_validation,
