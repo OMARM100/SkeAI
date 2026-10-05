@@ -3096,12 +3096,30 @@ PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
             TrainMatrix w1(d, ff);
             TrainMatrix w2(ff, d);
 
-            wq.values = wq_storage->values;
-            wk.values = wk_storage->values;
-            wv.values = wv_storage->values;
-            wo.values = wo_storage->values;
-            w1.values = w1_storage->values;
-            w2.values = w2_storage->values;
+            wq.values.assign(
+                wq_storage->values.begin(),
+                wq_storage->values.end()
+            );
+            wk.values.assign(
+                wk_storage->values.begin(),
+                wk_storage->values.end()
+            );
+            wv.values.assign(
+                wv_storage->values.begin(),
+                wv_storage->values.end()
+            );
+            wo.values.assign(
+                wo_storage->values.begin(),
+                wo_storage->values.end()
+            );
+            w1.values.assign(
+                w1_storage->values.begin(),
+                w1_storage->values.end()
+            );
+            w2.values.assign(
+                w2_storage->values.begin(),
+                w2_storage->values.end()
+            );
 
             const TrainLayerCache& cache = caches[layer];
 
