@@ -854,6 +854,344 @@ PyObject* cpp_dense_backward(PyObject*, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+
+PyObject* cpp_dense_indexed_forward(PyObject*, PyObject* args) {
+    PyObject* indices_object = nullptr;
+    PyObject* weights_object = nullptr;
+    PyObject* bias_object = nullptr;
+    PyObject* output_object = nullptr;
+    Py_ssize_t batch;
+    Py_ssize_t input_size;
+    Py_ssize_t output_size;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "OOOOonn:dense_indexed_forward",
+        &indices_object,
+        &weights_object,
+        &bias_object,
+        &output_object,
+        &batch,
+        &input_size,
+        &output_size
+    )) {
+        return nullptr;
+    }
+
+    if (batch <= 0 || input_size <= 0 || output_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "Dense indexed dimensions must be positive");
+        return nullptr;
+    }
+
+    StorageObject* weights = as_storage(weights_object);
+    StorageObject* bias = as_storage(bias_object);
+    StorageObject* output = as_storage(output_object);
+
+    if (weights == nullptr || bias == nullptr || output == nullptr) {
+        return nullptr;
+    }
+
+    std::size_t weight_count;
+    std::size_t output_count;
+
+    if (!checked_product(input_size, output_size, &weight_count) ||
+        !checked_product(batch, output_size, &output_count)) {
+        return nullptr;
+    }
+
+    if (weights->values.size() != weight_count ||
+        bias->values.size() != static_cast<std::size_t>(output_size) ||
+        output->values.size() != output_count) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Dense indexed buffers do not match the provided shapes"
+        );
+        return nullptr;
+    }
+
+    PyObject* sequence = PySequence_Fast(
+        indices_object,
+        "indices must be a sequence of integer feature indices"
+    );
+    if (sequence == nullptr) {
+        return nullptr;
+    }
+
+    const Py_ssize_t index_count =
+        PySequence_Fast_GET_SIZE(sequence);
+
+    if (index_count <= 0 || index_count % batch != 0) {
+        Py_DECREF(sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Indexed input count must be a positive multiple of batch size"
+        );
+        return nullptr;
+    }
+
+    const std::size_t positions_per_row =
+        static_cast<std::size_t>(index_count / batch);
+
+    std::vector<std::size_t> indices;
+    try {
+        indices.resize(static_cast<std::size_t>(index_count));
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    PyObject** items = PySequence_Fast_ITEMS(sequence);
+
+    for (Py_ssize_t index = 0; index < index_count; ++index) {
+        if (!PyLong_Check(items[index])) {
+            Py_DECREF(sequence);
+            PyErr_SetString(
+                PyExc_TypeError,
+                "indexed inputs must contain integers"
+            );
+            return nullptr;
+        }
+
+        const Py_ssize_t feature_index =
+            PyLong_AsSsize_t(items[index]);
+
+        if (PyErr_Occurred() != nullptr) {
+            Py_DECREF(sequence);
+            return nullptr;
+        }
+
+        if (feature_index < 0 || feature_index >= input_size) {
+            Py_DECREF(sequence);
+            PyErr_Format(
+                PyExc_ValueError,
+                "indexed feature out of range: %zd",
+                feature_index
+            );
+            return nullptr;
+        }
+
+        indices[static_cast<std::size_t>(index)] =
+            static_cast<std::size_t>(feature_index);
+    }
+
+    Py_DECREF(sequence);
+
+    const std::size_t batch_u = static_cast<std::size_t>(batch);
+    const std::size_t output_u = static_cast<std::size_t>(output_size);
+
+    Py_BEGIN_ALLOW_THREADS
+
+    for (std::size_t row = 0; row < batch_u; ++row) {
+        double* output_row =
+            output->values.data() + row * output_u;
+
+        for (std::size_t column = 0; column < output_u; ++column) {
+            output_row[column] = bias->values[column];
+        }
+
+        const std::size_t index_base =
+            row * positions_per_row;
+
+        for (std::size_t position = 0;
+             position < positions_per_row;
+             ++position) {
+            const std::size_t feature_index =
+                indices[index_base + position];
+
+            const double* weight_row =
+                weights->values.data() +
+                feature_index * output_u;
+
+            for (std::size_t column = 0;
+                 column < output_u;
+                 ++column) {
+                output_row[column] += weight_row[column];
+            }
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+
+    Py_RETURN_NONE;
+}
+
+PyObject* cpp_dense_indexed_backward(PyObject*, PyObject* args) {
+    PyObject* indices_object = nullptr;
+    PyObject* grad_output_object = nullptr;
+    PyObject* grad_weights_object = nullptr;
+    PyObject* grad_bias_object = nullptr;
+    Py_ssize_t batch;
+    Py_ssize_t input_size;
+    Py_ssize_t output_size;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "OOOOonn:dense_indexed_backward",
+        &indices_object,
+        &grad_output_object,
+        &grad_weights_object,
+        &grad_bias_object,
+        &batch,
+        &input_size,
+        &output_size
+    )) {
+        return nullptr;
+    }
+
+    if (batch <= 0 || input_size <= 0 || output_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "Dense indexed dimensions must be positive");
+        return nullptr;
+    }
+
+    StorageObject* grad_output = as_storage(grad_output_object);
+    StorageObject* grad_weights = as_storage(grad_weights_object);
+    StorageObject* grad_bias = as_storage(grad_bias_object);
+
+    if (grad_output == nullptr ||
+        grad_weights == nullptr ||
+        grad_bias == nullptr) {
+        return nullptr;
+    }
+
+    std::size_t weight_count;
+    std::size_t output_count;
+
+    if (!checked_product(input_size, output_size, &weight_count) ||
+        !checked_product(batch, output_size, &output_count)) {
+        return nullptr;
+    }
+
+    if (grad_output->values.size() != output_count ||
+        grad_weights->values.size() != weight_count ||
+        grad_bias->values.size() != static_cast<std::size_t>(output_size)) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Dense indexed gradient buffers do not match the provided shapes"
+        );
+        return nullptr;
+    }
+
+    PyObject* sequence = PySequence_Fast(
+        indices_object,
+        "indices must be a sequence of integer feature indices"
+    );
+    if (sequence == nullptr) {
+        return nullptr;
+    }
+
+    const Py_ssize_t index_count =
+        PySequence_Fast_GET_SIZE(sequence);
+
+    if (index_count <= 0 || index_count % batch != 0) {
+        Py_DECREF(sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Indexed input count must be a positive multiple of batch size"
+        );
+        return nullptr;
+    }
+
+    const std::size_t positions_per_row =
+        static_cast<std::size_t>(index_count / batch);
+
+    std::vector<std::size_t> indices;
+    try {
+        indices.resize(static_cast<std::size_t>(index_count));
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    PyObject** items = PySequence_Fast_ITEMS(sequence);
+
+    for (Py_ssize_t index = 0; index < index_count; ++index) {
+        if (!PyLong_Check(items[index])) {
+            Py_DECREF(sequence);
+            PyErr_SetString(
+                PyExc_TypeError,
+                "indexed inputs must contain integers"
+            );
+            return nullptr;
+        }
+
+        const Py_ssize_t feature_index =
+            PyLong_AsSsize_t(items[index]);
+
+        if (PyErr_Occurred() != nullptr) {
+            Py_DECREF(sequence);
+            return nullptr;
+        }
+
+        if (feature_index < 0 || feature_index >= input_size) {
+            Py_DECREF(sequence);
+            PyErr_Format(
+                PyExc_ValueError,
+                "indexed feature out of range: %zd",
+                feature_index
+            );
+            return nullptr;
+        }
+
+        indices[static_cast<std::size_t>(index)] =
+            static_cast<std::size_t>(feature_index);
+    }
+
+    Py_DECREF(sequence);
+
+    const std::size_t batch_u = static_cast<std::size_t>(batch);
+    const std::size_t output_u = static_cast<std::size_t>(output_size);
+
+    Py_BEGIN_ALLOW_THREADS
+
+    std::fill(
+        grad_weights->values.begin(),
+        grad_weights->values.end(),
+        0.0
+    );
+    std::fill(
+        grad_bias->values.begin(),
+        grad_bias->values.end(),
+        0.0
+    );
+
+    for (std::size_t row = 0; row < batch_u; ++row) {
+        const double* grad_row =
+            grad_output->values.data() + row * output_u;
+
+        for (std::size_t column = 0;
+             column < output_u;
+             ++column) {
+            grad_bias->values[column] += grad_row[column];
+        }
+
+        const std::size_t index_base =
+            row * positions_per_row;
+
+        for (std::size_t position = 0;
+             position < positions_per_row;
+             ++position) {
+            const std::size_t feature_index =
+                indices[index_base + position];
+
+            double* grad_weight_row =
+                grad_weights->values.data() +
+                feature_index * output_u;
+
+            for (std::size_t column = 0;
+                 column < output_u;
+                 ++column) {
+                grad_weight_row[column] += grad_row[column];
+            }
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+
+    Py_RETURN_NONE;
+}
+
 PyObject* cpp_relu_forward(PyObject*, PyObject* args) {
     PyObject* input_object = nullptr;
     PyObject* output_object = nullptr;
@@ -1481,6 +1819,10 @@ PyMethodDef module_methods[] = {
      "Rank-2 transpose."},
     {"dense_forward", cpp_dense_forward, METH_VARARGS,
      "Dense forward kernel."},
+    {"dense_indexed_forward", cpp_dense_indexed_forward, METH_VARARGS,
+     "Dense forward kernel for sparse indexed one-hot inputs."},
+    {"dense_indexed_backward", cpp_dense_indexed_backward, METH_VARARGS,
+     "Dense backward kernel for sparse indexed one-hot inputs."},
     {"dense_backward", cpp_dense_backward, METH_VARARGS,
      "Dense backward kernel."},
     {"relu_forward", cpp_relu_forward, METH_VARARGS,
