@@ -84,17 +84,22 @@ class HybridTokenizer:
             unit_counts.update(self.split_units(text))
             character_counts.update(text)
 
-        # Character fallback is always included so unseen words remain encodable.
+        # Prefer frequent multi-character units. The previous implementation
+        # filled the vocabulary with single characters first, which left very
+        # little room for words/phrases. That made Arabic dialogue sequences
+        # unnecessarily long and caused the 48-token context to lose most of
+        # the conversational structure.
         unit_candidates = [
             token
             for token, count in unit_counts.items()
-            if count >= min_frequency
+            if count >= min_frequency and len(token) > 1
         ]
-        unit_candidates.sort(key=lambda token: (-unit_counts[token], token))
+        unit_candidates.sort(key=lambda token: (-unit_counts[token], -len(token), token))
 
-        # Character fallback gets priority so every character seen in the
-        # training corpus remains representable by the Level 2 tokenizer.
-        character_candidates = sorted(character_counts, key=ord)
+        character_candidates = sorted(
+            character_counts,
+            key=lambda token: (-character_counts[token], ord(token)),
+        )
 
         seen = set(self.id_to_token)
         added = 0
@@ -104,10 +109,14 @@ class HybridTokenizer:
                 "max_units must be at least the number of existing vocabulary tokens."
             )
 
+        # Keep a bounded character reserve so unseen words still decompose
+        # into characters, while preserving most of the vocabulary for useful
+        # frequent words and punctuation patterns.
+        character_reserve = min(192, available_slots)
         for token in character_candidates:
             if token in seen:
                 continue
-            if added >= available_slots:
+            if added >= character_reserve:
                 break
             self.id_to_token.append(token)
             self.token_to_id[token] = len(self.id_to_token) - 1
@@ -123,6 +132,19 @@ class HybridTokenizer:
             self.token_to_id[token] = len(self.id_to_token) - 1
             seen.add(token)
             added += 1
+
+        # Fill any remaining slots with lower-frequency single-character
+        # units that were not part of the reserve.
+        if added < available_slots:
+            for token in sorted(character_counts, key=ord):
+                if token in seen:
+                    continue
+                if added >= available_slots:
+                    break
+                self.id_to_token.append(token)
+                self.token_to_id[token] = len(self.id_to_token) - 1
+                seen.add(token)
+                added += 1
 
     def encode(
         self,
