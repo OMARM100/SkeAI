@@ -201,6 +201,36 @@ class Level2TransformerTests(unittest.TestCase):
 
         self.assertLess(final, initial)
 
+    def test_generation_supports_greedy_and_sampling(self) -> None:
+        model = self.make_model()
+        prompt = [1, 2, 3]
+
+        greedy = model.generate(
+            prompt,
+            max_new_tokens=5,
+            temperature=0.0,
+        )
+        sampled_a = model.generate(
+            prompt,
+            max_new_tokens=5,
+            temperature=0.9,
+            top_k=4,
+            seed=123,
+        )
+        sampled_b = model.generate(
+            prompt,
+            max_new_tokens=5,
+            temperature=0.9,
+            top_k=4,
+            seed=123,
+        )
+
+        self.assertEqual(len(greedy), len(prompt) + 5)
+        self.assertEqual(len(sampled_a), len(prompt) + 5)
+        self.assertEqual(sampled_a, sampled_b)
+        self.assertTrue(all(0 <= token < model.vocab_size for token in greedy))
+        self.assertTrue(all(0 <= token < model.vocab_size for token in sampled_a))
+
     def test_checkpoint_round_trip(self) -> None:
         model = self.make_model()
 
