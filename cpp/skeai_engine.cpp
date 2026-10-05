@@ -1977,6 +1977,1265 @@ PyObject* cpp_sgd_step(PyObject*, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+
+
+struct TrainMatrix {
+    std::size_t rows = 0;
+    std::size_t cols = 0;
+    std::vector<double> values;
+
+    TrainMatrix() = default;
+
+    TrainMatrix(std::size_t rows_, std::size_t cols_)
+        : rows(rows_), cols(cols_), values(rows_ * cols_, 0.0) {}
+
+    double* row_ptr(std::size_t row) {
+        return values.data() + row * cols;
+    }
+
+    const double* row_ptr(std::size_t row) const {
+        return values.data() + row * cols;
+    }
+
+    double& at(std::size_t row, std::size_t col) {
+        return values[row * cols + col];
+    }
+
+    const double& at(std::size_t row, std::size_t col) const {
+        return values[row * cols + col];
+    }
+};
+
+struct TrainLayerCache {
+    TrainMatrix input;
+    TrainMatrix norm_x;
+    std::vector<double> mean1;
+    std::vector<double> inv1;
+    TrainMatrix q;
+    TrainMatrix k;
+    TrainMatrix v;
+    std::vector<TrainMatrix> probabilities;
+    TrainMatrix merged;
+    TrainMatrix attention_output;
+    TrainMatrix residual;
+    TrainMatrix norm_residual;
+    std::vector<double> mean2;
+    std::vector<double> inv2;
+    TrainMatrix hidden_pre;
+    TrainMatrix hidden;
+};
+
+TrainMatrix train_matmul(
+    const TrainMatrix& left,
+    const TrainMatrix& right
+) {
+    if (left.cols != right.rows) {
+        throw std::runtime_error("incompatible training matmul");
+    }
+
+    TrainMatrix output(left.rows, right.cols);
+
+    for (std::size_t row = 0; row < left.rows; ++row) {
+        const double* left_row = left.row_ptr(row);
+        double* output_row = output.row_ptr(row);
+
+        for (std::size_t inner = 0; inner < left.cols; ++inner) {
+            const double value = left_row[inner];
+            const double* right_row = right.row_ptr(inner);
+
+            for (std::size_t column = 0;
+                 column < right.cols;
+                 ++column) {
+                output_row[column] +=
+                    value * right_row[column];
+            }
+        }
+    }
+
+    return output;
+}
+
+TrainMatrix train_transpose(const TrainMatrix& input) {
+    TrainMatrix output(input.cols, input.rows);
+
+    for (std::size_t row = 0; row < input.rows; ++row) {
+        const double* input_row = input.row_ptr(row);
+        for (std::size_t column = 0;
+             column < input.cols;
+             ++column) {
+            output.at(column, row) = input_row[column];
+        }
+    }
+
+    return output;
+}
+
+TrainMatrix train_add(
+    const TrainMatrix& left,
+    const TrainMatrix& right
+) {
+    if (left.rows != right.rows || left.cols != right.cols) {
+        throw std::runtime_error("incompatible training add");
+    }
+
+    TrainMatrix output(left.rows, left.cols);
+    for (std::size_t index = 0;
+         index < output.values.size();
+         ++index) {
+        output.values[index] =
+            left.values[index] +
+            right.values[index];
+    }
+    return output;
+}
+
+void train_layer_norm_forward(
+    const TrainMatrix& input,
+    TrainMatrix& output,
+    std::vector<double>& means,
+    std::vector<double>& inv_stds
+) {
+    output = TrainMatrix(input.rows, input.cols);
+    means.assign(input.rows, 0.0);
+    inv_stds.assign(input.rows, 0.0);
+
+    const double eps = 1e-5;
+
+    for (std::size_t row = 0; row < input.rows; ++row) {
+        const double* input_row = input.row_ptr(row);
+        double* output_row = output.row_ptr(row);
+
+        double mean = 0.0;
+        for (std::size_t column = 0; column < input.cols; ++column) {
+            mean += input_row[column];
+        }
+        mean /= static_cast<double>(input.cols);
+
+        double variance = 0.0;
+        for (std::size_t column = 0; column < input.cols; ++column) {
+            const double centered = input_row[column] - mean;
+            variance += centered * centered;
+        }
+        variance /= static_cast<double>(input.cols);
+
+        const double inv_std = 1.0 / std::sqrt(variance + eps);
+        means[row] = mean;
+        inv_stds[row] = inv_std;
+
+        for (std::size_t column = 0; column < input.cols; ++column) {
+            output_row[column] =
+                (input_row[column] - mean) * inv_std;
+        }
+    }
+}
+
+TrainMatrix train_layer_norm_backward(
+    const TrainMatrix& gradient,
+    const TrainMatrix& input,
+    const std::vector<double>& means,
+    const std::vector<double>& inv_stds
+) {
+    if (gradient.rows != input.rows ||
+        gradient.cols != input.cols ||
+        means.size() != input.rows ||
+        inv_stds.size() != input.rows) {
+        throw std::runtime_error("invalid layer norm backward cache");
+    }
+
+    TrainMatrix output(input.rows, input.cols);
+    const double width = static_cast<double>(input.cols);
+
+    for (std::size_t row = 0; row < input.rows; ++row) {
+        const double* gradient_row = gradient.row_ptr(row);
+        const double* input_row = input.row_ptr(row);
+        double* output_row = output.row_ptr(row);
+
+        double sum_gradient = 0.0;
+        double sum_gradient_xhat = 0.0;
+
+        for (std::size_t column = 0;
+             column < input.cols;
+             ++column) {
+            const double xhat =
+                (input_row[column] - means[row]) *
+                inv_stds[row];
+            sum_gradient += gradient_row[column];
+            sum_gradient_xhat +=
+                gradient_row[column] * xhat;
+        }
+
+        for (std::size_t column = 0;
+             column < input.cols;
+             ++column) {
+            const double xhat =
+                (input_row[column] - means[row]) *
+                inv_stds[row];
+
+            output_row[column] =
+                (inv_stds[row] / width) *
+                (
+                    width * gradient_row[column]
+                    - sum_gradient
+                    - xhat * sum_gradient_xhat
+                );
+        }
+    }
+
+    return output;
+}
+
+TrainMatrix train_causal_softmax(
+    const TrainMatrix& scores
+) {
+    TrainMatrix output(scores.rows, scores.cols);
+
+    for (std::size_t row = 0; row < scores.rows; ++row) {
+        const double* score_row = scores.row_ptr(row);
+        double* output_row = output.row_ptr(row);
+
+        const std::size_t last_allowed =
+            std::min(row, scores.cols - 1);
+
+        double maximum = score_row[0];
+        for (std::size_t column = 1;
+             column <= last_allowed;
+             ++column) {
+            maximum = std::max(maximum, score_row[column]);
+        }
+
+        double total = 0.0;
+        for (std::size_t column = 0;
+             column <= last_allowed;
+             ++column) {
+            const double value =
+                std::exp(score_row[column] - maximum);
+            output_row[column] = value;
+            total += value;
+        }
+
+        const double inverse_total = 1.0 / total;
+        for (std::size_t column = 0;
+             column <= last_allowed;
+             ++column) {
+            output_row[column] *= inverse_total;
+        }
+    }
+
+    return output;
+}
+
+TrainMatrix train_softmax_backward(
+    const TrainMatrix& probabilities,
+    const TrainMatrix& gradient
+) {
+    if (probabilities.rows != gradient.rows ||
+        probabilities.cols != gradient.cols) {
+        throw std::runtime_error(
+            "incompatible training softmax backward"
+        );
+    }
+
+    TrainMatrix output(probabilities.rows, probabilities.cols);
+
+    for (std::size_t row = 0;
+         row < probabilities.rows;
+         ++row) {
+        const double* probability_row =
+            probabilities.row_ptr(row);
+        const double* gradient_row =
+            gradient.row_ptr(row);
+        double* output_row =
+            output.row_ptr(row);
+
+        double dot = 0.0;
+        for (std::size_t column = 0;
+             column < probabilities.cols;
+             ++column) {
+            dot +=
+                probability_row[column] *
+                gradient_row[column];
+        }
+
+        for (std::size_t column = 0;
+             column < probabilities.cols;
+             ++column) {
+            output_row[column] =
+                probability_row[column] *
+                (gradient_row[column] - dot);
+        }
+    }
+
+    return output;
+}
+
+TrainMatrix train_relu(
+    const TrainMatrix& input
+) {
+    TrainMatrix output(input.rows, input.cols);
+
+    for (std::size_t index = 0;
+         index < input.values.size();
+         ++index) {
+        output.values[index] =
+            input.values[index] > 0.0
+                ? input.values[index]
+                : 0.0;
+    }
+
+    return output;
+}
+
+TrainMatrix train_relu_backward(
+    const TrainMatrix& gradient,
+    const TrainMatrix& input
+) {
+    if (gradient.rows != input.rows ||
+        gradient.cols != input.cols) {
+        throw std::runtime_error(
+            "incompatible training relu backward"
+        );
+    }
+
+    TrainMatrix output(input.rows, input.cols);
+
+    for (std::size_t index = 0;
+         index < input.values.size();
+         ++index) {
+        output.values[index] =
+            input.values[index] > 0.0
+                ? gradient.values[index]
+                : 0.0;
+    }
+
+    return output;
+}
+
+TrainMatrix train_slice_columns(
+    const TrainMatrix& matrix,
+    std::size_t start,
+    std::size_t width
+) {
+    if (start + width > matrix.cols) {
+        throw std::runtime_error("training slice out of range");
+    }
+
+    TrainMatrix output(matrix.rows, width);
+    for (std::size_t row = 0; row < matrix.rows; ++row) {
+        const double* input_row = matrix.row_ptr(row);
+        double* output_row = output.row_ptr(row);
+        for (std::size_t column = 0; column < width; ++column) {
+            output_row[column] = input_row[start + column];
+        }
+    }
+    return output;
+}
+
+void train_write_slice(
+    TrainMatrix& target,
+    const TrainMatrix& source,
+    std::size_t start
+) {
+    if (target.rows != source.rows ||
+        start + source.cols > target.cols) {
+        throw std::runtime_error("training slice write out of range");
+    }
+
+    for (std::size_t row = 0; row < target.rows; ++row) {
+        double* target_row = target.row_ptr(row);
+        const double* source_row = source.row_ptr(row);
+        for (std::size_t column = 0;
+             column < source.cols;
+             ++column) {
+            target_row[start + column] = source_row[column];
+        }
+    }
+}
+
+void train_add_inplace(
+    TrainMatrix& target,
+    const TrainMatrix& source
+) {
+    if (target.rows != source.rows ||
+        target.cols != source.cols) {
+        throw std::runtime_error("training inplace add shape mismatch");
+    }
+
+    for (std::size_t index = 0;
+         index < target.values.size();
+         ++index) {
+        target.values[index] += source.values[index];
+    }
+}
+
+void train_accumulate_parameter_gradient(
+    std::vector<double>& gradient,
+    const TrainMatrix& value,
+    double scale
+) {
+    if (gradient.size() != value.values.size()) {
+        throw std::runtime_error("training gradient shape mismatch");
+    }
+
+    for (std::size_t index = 0;
+         index < value.values.size();
+         ++index) {
+        gradient[index] += scale * value.values[index];
+    }
+}
+
+bool train_is_finite(const TrainMatrix& matrix) {
+    for (double value : matrix.values) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+PyObject* cpp_transformer_train_step(PyObject*, PyObject* args) {
+    PyObject* parameters_object = nullptr;
+    PyObject* token_ids_object = nullptr;
+    PyObject* target_ids_object = nullptr;
+    Py_ssize_t vocab_size;
+    Py_ssize_t context_length;
+    Py_ssize_t d_model;
+    Py_ssize_t n_heads;
+    Py_ssize_t feed_forward_size;
+    Py_ssize_t n_layers;
+    Py_ssize_t sequence_length;
+    double learning_rate;
+
+    if (!PyArg_ParseTuple(
+        args,
+        "OOOnnnnnnnd:transformer_train_step",
+        &parameters_object,
+        &token_ids_object,
+        &target_ids_object,
+        &vocab_size,
+        &context_length,
+        &d_model,
+        &n_heads,
+        &feed_forward_size,
+        &n_layers,
+        &sequence_length,
+        &learning_rate
+    )) {
+        return nullptr;
+    }
+
+    if (vocab_size <= 0 ||
+        context_length <= 0 ||
+        d_model <= 0 ||
+        n_heads <= 0 ||
+        feed_forward_size <= 0 ||
+        n_layers <= 0 ||
+        sequence_length <= 0 ||
+        sequence_length > context_length ||
+        d_model % n_heads != 0 ||
+        !std::isfinite(learning_rate) ||
+        learning_rate <= 0.0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "invalid transformer training dimensions or learning rate"
+        );
+        return nullptr;
+    }
+
+    PyObject* parameters_sequence = PySequence_Fast(
+        parameters_object,
+        "parameters must be a sequence of C++ Storage objects"
+    );
+    if (parameters_sequence == nullptr) {
+        return nullptr;
+    }
+
+    const std::size_t layer_count =
+        static_cast<std::size_t>(n_layers);
+    const std::size_t expected_parameters =
+        3 + 6 * layer_count;
+
+    if (PySequence_Fast_GET_SIZE(parameters_sequence) !=
+        static_cast<Py_ssize_t>(expected_parameters)) {
+        Py_DECREF(parameters_sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "unexpected transformer parameter count"
+        );
+        return nullptr;
+    }
+
+    std::vector<StorageObject*> parameters;
+    try {
+        parameters.reserve(expected_parameters);
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(parameters_sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    PyObject** parameter_items =
+        PySequence_Fast_ITEMS(parameters_sequence);
+
+    for (std::size_t index = 0;
+         index < expected_parameters;
+         ++index) {
+        StorageObject* storage =
+            as_storage(parameter_items[index]);
+
+        if (storage == nullptr) {
+            Py_DECREF(parameters_sequence);
+            return nullptr;
+        }
+
+        parameters.push_back(storage);
+    }
+
+    std::vector<int> token_ids;
+    std::vector<int> target_ids;
+
+    PyObject* token_sequence = PySequence_Fast(
+        token_ids_object,
+        "token_ids must be a sequence of integers"
+    );
+    if (token_sequence == nullptr) {
+        Py_DECREF(parameters_sequence);
+        return nullptr;
+    }
+
+    PyObject* target_sequence = PySequence_Fast(
+        target_ids_object,
+        "target_ids must be a sequence of integers"
+    );
+    if (target_sequence == nullptr) {
+        Py_DECREF(token_sequence);
+        Py_DECREF(parameters_sequence);
+        return nullptr;
+    }
+
+    const Py_ssize_t token_count =
+        PySequence_Fast_GET_SIZE(token_sequence);
+    const Py_ssize_t target_count =
+        PySequence_Fast_GET_SIZE(target_sequence);
+
+    if (token_count != sequence_length ||
+        target_count != sequence_length) {
+        Py_DECREF(token_sequence);
+        Py_DECREF(target_sequence);
+        Py_DECREF(parameters_sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "token and target lengths must match sequence_length"
+        );
+        return nullptr;
+    }
+
+    try {
+        token_ids.resize(static_cast<std::size_t>(sequence_length));
+        target_ids.resize(static_cast<std::size_t>(sequence_length));
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(token_sequence);
+        Py_DECREF(target_sequence);
+        Py_DECREF(parameters_sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    PyObject** token_items =
+        PySequence_Fast_ITEMS(token_sequence);
+    PyObject** target_items =
+        PySequence_Fast_ITEMS(target_sequence);
+
+    for (Py_ssize_t index = 0;
+         index < sequence_length;
+         ++index) {
+        if (!PyLong_Check(token_items[index]) ||
+            !PyLong_Check(target_items[index])) {
+            Py_DECREF(token_sequence);
+            Py_DECREF(target_sequence);
+            Py_DECREF(parameters_sequence);
+            PyErr_SetString(
+                PyExc_TypeError,
+                "transformer token and target ids must be integers"
+            );
+            return nullptr;
+        }
+
+        const Py_ssize_t token =
+            PyLong_AsSsize_t(token_items[index]);
+        const Py_ssize_t target =
+            PyLong_AsSsize_t(target_items[index]);
+
+        if (PyErr_Occurred() != nullptr) {
+            Py_DECREF(token_sequence);
+            Py_DECREF(target_sequence);
+            Py_DECREF(parameters_sequence);
+            return nullptr;
+        }
+
+        if (token < 0 || token >= vocab_size ||
+            target < 0 || target >= vocab_size) {
+            Py_DECREF(token_sequence);
+            Py_DECREF(target_sequence);
+            Py_DECREF(parameters_sequence);
+            PyErr_SetString(
+                PyExc_ValueError,
+                "transformer token or target id out of range"
+            );
+            return nullptr;
+        }
+
+        token_ids[static_cast<std::size_t>(index)] =
+            static_cast<int>(token);
+        target_ids[static_cast<std::size_t>(index)] =
+            static_cast<int>(target);
+    }
+
+    Py_DECREF(token_sequence);
+    Py_DECREF(target_sequence);
+
+    const std::size_t vocab =
+        static_cast<std::size_t>(vocab_size);
+    const std::size_t context =
+        static_cast<std::size_t>(context_length);
+    const std::size_t d =
+        static_cast<std::size_t>(d_model);
+    const std::size_t heads =
+        static_cast<std::size_t>(n_heads);
+    const std::size_t ff =
+        static_cast<std::size_t>(feed_forward_size);
+    const std::size_t layers =
+        static_cast<std::size_t>(n_layers);
+    const std::size_t length =
+        static_cast<std::size_t>(sequence_length);
+    const std::size_t head_dim = d / heads;
+
+    const std::size_t token_parameter_count = vocab * d;
+    const std::size_t position_parameter_count = context * d;
+    const std::size_t qkv_parameter_count = d * d;
+    const std::size_t w1_parameter_count = d * ff;
+    const std::size_t w2_parameter_count = ff * d;
+    const std::size_t lm_parameter_count = d * vocab;
+
+    if (parameters[0]->values.size() != token_parameter_count ||
+        parameters[1]->values.size() != position_parameter_count ||
+        parameters[expected_parameters - 1]->values.size() != lm_parameter_count) {
+        Py_DECREF(parameters_sequence);
+        PyErr_SetString(
+            PyExc_ValueError,
+            "transformer embedding or LM parameter shape mismatch"
+        );
+        return nullptr;
+    }
+
+    for (std::size_t layer = 0; layer < layers; ++layer) {
+        const std::size_t base = 2 + layer * 6;
+        if (parameters[base + 0]->values.size() != qkv_parameter_count ||
+            parameters[base + 1]->values.size() != qkv_parameter_count ||
+            parameters[base + 2]->values.size() != qkv_parameter_count ||
+            parameters[base + 3]->values.size() != qkv_parameter_count ||
+            parameters[base + 4]->values.size() != w1_parameter_count ||
+            parameters[base + 5]->values.size() != w2_parameter_count) {
+            Py_DECREF(parameters_sequence);
+            PyErr_SetString(
+                PyExc_ValueError,
+                "transformer block parameter shape mismatch"
+            );
+            return nullptr;
+        }
+    }
+
+    std::vector<std::vector<double>> parameter_gradients;
+    try {
+        parameter_gradients.resize(expected_parameters);
+        for (std::size_t index = 0;
+             index < expected_parameters;
+             ++index) {
+            parameter_gradients[index].assign(
+                parameters[index]->values.size(),
+                0.0
+            );
+        }
+    } catch (const std::bad_alloc&) {
+        Py_DECREF(parameters_sequence);
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    Py_DECREF(parameters_sequence);
+
+    try {
+        TrainMatrix x(length, d);
+
+        for (std::size_t row = 0; row < length; ++row) {
+            const int token_id = token_ids[row];
+            const double* token_row =
+                parameters[0]->values.data() +
+                static_cast<std::size_t>(token_id) * d;
+            const double* position_row =
+                parameters[1]->values.data() +
+                row * d;
+            double* x_row = x.row_ptr(row);
+
+            for (std::size_t column = 0; column < d; ++column) {
+                x_row[column] =
+                    token_row[column] +
+                    position_row[column];
+            }
+        }
+
+        std::vector<TrainLayerCache> caches;
+        caches.resize(layers);
+
+        for (std::size_t layer = 0; layer < layers; ++layer) {
+            const std::size_t base = 2 + layer * 6;
+            const StorageObject* wq_storage = parameters[base + 0];
+            const StorageObject* wk_storage = parameters[base + 1];
+            const StorageObject* wv_storage = parameters[base + 2];
+            const StorageObject* wo_storage = parameters[base + 3];
+            const StorageObject* w1_storage = parameters[base + 4];
+            const StorageObject* w2_storage = parameters[base + 5];
+
+            TrainMatrix wq(d, d);
+            TrainMatrix wk(d, d);
+            TrainMatrix wv(d, d);
+            TrainMatrix wo(d, d);
+            TrainMatrix w1(d, ff);
+            TrainMatrix w2(ff, d);
+
+            wq.values = wq_storage->values;
+            wk.values = wk_storage->values;
+            wv.values = wv_storage->values;
+            wo.values = wo_storage->values;
+            w1.values = w1_storage->values;
+            w2.values = w2_storage->values;
+
+            TrainLayerCache& cache = caches[layer];
+            cache.input = x;
+
+            train_layer_norm_forward(
+                x,
+                cache.norm_x,
+                cache.mean1,
+                cache.inv1
+            );
+
+            cache.q = train_matmul(cache.norm_x, wq);
+            cache.k = train_matmul(cache.norm_x, wk);
+            cache.v = train_matmul(cache.norm_x, wv);
+
+            cache.probabilities.resize(heads);
+            cache.merged = TrainMatrix(length, d);
+
+            const double attention_scale =
+                1.0 / std::sqrt(static_cast<double>(head_dim));
+
+            for (std::size_t head = 0; head < heads; ++head) {
+                const std::size_t start = head * head_dim;
+                TrainMatrix qh =
+                    train_slice_columns(cache.q, start, head_dim);
+                TrainMatrix kh =
+                    train_slice_columns(cache.k, start, head_dim);
+                TrainMatrix vh =
+                    train_slice_columns(cache.v, start, head_dim);
+
+                TrainMatrix kt = train_transpose(kh);
+                TrainMatrix scores =
+                    train_matmul(qh, kt);
+
+                for (double& value : scores.values) {
+                    value *= attention_scale;
+                }
+
+                TrainMatrix probs =
+                    train_causal_softmax(scores);
+                TrainMatrix attended =
+                    train_matmul(probs, vh);
+
+                train_write_slice(
+                    cache.merged,
+                    attended,
+                    start
+                );
+                cache.probabilities[head] =
+                    std::move(probs);
+            }
+
+            cache.attention_output =
+                train_matmul(cache.merged, wo);
+
+            cache.residual =
+                train_add(x, cache.attention_output);
+
+            train_layer_norm_forward(
+                cache.residual,
+                cache.norm_residual,
+                cache.mean2,
+                cache.inv2
+            );
+
+            cache.hidden_pre =
+                train_matmul(cache.norm_residual, w1);
+            cache.hidden =
+                train_relu(cache.hidden_pre);
+
+            TrainMatrix feed_forward =
+                train_matmul(cache.hidden, w2);
+
+            x = train_add(cache.residual, feed_forward);
+        }
+
+        TrainMatrix final_norm;
+        std::vector<double> final_mean;
+        std::vector<double> final_inv;
+        train_layer_norm_forward(
+            x,
+            final_norm,
+            final_mean,
+            final_inv
+        );
+
+        TrainMatrix lm_head(d, vocab);
+        lm_head.values = parameters[
+            expected_parameters - 1
+        ]->values;
+
+        TrainMatrix logits =
+            train_matmul(final_norm, lm_head);
+
+        if (!train_is_finite(logits)) {
+            PyErr_SetString(
+                PyExc_FloatingPointError,
+                "non-finite logits produced by transformer training"
+            );
+            return nullptr;
+        }
+
+        TrainMatrix dlogits(length, vocab);
+        double total_loss = 0.0;
+
+        for (std::size_t row = 0; row < length; ++row) {
+            const double* logits_row = logits.row_ptr(row);
+            double* dlogits_row = dlogits.row_ptr(row);
+
+            double maximum = logits_row[0];
+            for (std::size_t column = 1;
+                 column < vocab;
+                 ++column) {
+                maximum = std::max(
+                    maximum,
+                    logits_row[column]
+                );
+            }
+
+            double sum = 0.0;
+            for (std::size_t column = 0;
+                 column < vocab;
+                 ++column) {
+                const double value =
+                    std::exp(logits_row[column] - maximum);
+                dlogits_row[column] = value;
+                sum += value;
+            }
+
+            if (!(sum > 0.0) || !std::isfinite(sum)) {
+                PyErr_SetString(
+                    PyExc_FloatingPointError,
+                    "invalid transformer softmax normalization"
+                );
+                return nullptr;
+            }
+
+            const double inverse_sum = 1.0 / sum;
+            for (std::size_t column = 0;
+                 column < vocab;
+                 ++column) {
+                dlogits_row[column] *= inverse_sum;
+            }
+
+            const std::size_t target =
+                static_cast<std::size_t>(target_ids[row]);
+            const double probability =
+                std::max(dlogits_row[target], 1e-12);
+
+            total_loss -= std::log(probability);
+            dlogits_row[target] -= 1.0;
+        }
+
+        const double inverse_length =
+            1.0 / static_cast<double>(length);
+        for (double& value : dlogits.values) {
+            value *= inverse_length;
+        }
+
+        TrainMatrix final_norm_transpose =
+            train_transpose(final_norm);
+
+        TrainMatrix grad_lm_head =
+            train_matmul(final_norm_transpose, dlogits);
+
+        train_accumulate_parameter_gradient(
+            parameter_gradients[
+                expected_parameters - 1
+            ],
+            grad_lm_head,
+            1.0
+        );
+
+        TrainMatrix lm_transpose =
+            train_transpose(lm_head);
+        TrainMatrix grad_final_norm =
+            train_matmul(dlogits, lm_transpose);
+
+        TrainMatrix grad_x =
+            train_layer_norm_backward(
+                grad_final_norm,
+                x,
+                final_mean,
+                final_inv
+            );
+
+        for (std::size_t reverse = 0;
+             reverse < layers;
+             ++reverse) {
+            const std::size_t layer = layers - 1 - reverse;
+            const std::size_t base = 2 + layer * 6;
+            const StorageObject* wq_storage = parameters[base + 0];
+            const StorageObject* wk_storage = parameters[base + 1];
+            const StorageObject* wv_storage = parameters[base + 2];
+            const StorageObject* wo_storage = parameters[base + 3];
+            const StorageObject* w1_storage = parameters[base + 4];
+            const StorageObject* w2_storage = parameters[base + 5];
+
+            TrainMatrix wq(d, d);
+            TrainMatrix wk(d, d);
+            TrainMatrix wv(d, d);
+            TrainMatrix wo(d, d);
+            TrainMatrix w1(d, ff);
+            TrainMatrix w2(ff, d);
+
+            wq.values = wq_storage->values;
+            wk.values = wk_storage->values;
+            wv.values = wv_storage->values;
+            wo.values = wo_storage->values;
+            w1.values = w1_storage->values;
+            w2.values = w2_storage->values;
+
+            const TrainLayerCache& cache = caches[layer];
+
+            TrainMatrix d_next = grad_x;
+            TrainMatrix d_residual = d_next;
+
+            TrainMatrix w2_transpose = train_transpose(w2);
+            TrainMatrix d_hidden =
+                train_matmul(d_next, w2_transpose);
+
+            TrainMatrix hidden_transpose =
+                train_transpose(cache.hidden);
+
+            TrainMatrix d_w2 =
+                train_matmul(hidden_transpose, d_next);
+
+            TrainMatrix d_hidden_pre =
+                train_relu_backward(
+                    d_hidden,
+                    cache.hidden_pre
+                );
+
+            TrainMatrix w1_transpose = train_transpose(w1);
+            TrainMatrix d_norm_residual =
+                train_matmul(
+                    d_hidden_pre,
+                    w1_transpose
+                );
+
+            TrainMatrix norm_residual_transpose =
+                train_transpose(cache.norm_residual);
+
+            TrainMatrix d_w1 =
+                train_matmul(
+                    norm_residual_transpose,
+                    d_hidden_pre
+                );
+
+            TrainMatrix d_residual_norm =
+                train_layer_norm_backward(
+                    d_norm_residual,
+                    cache.residual,
+                    cache.mean2,
+                    cache.inv2
+                );
+
+            train_add_inplace(
+                d_residual,
+                d_residual_norm
+            );
+
+            TrainMatrix wo_transpose = train_transpose(wo);
+            TrainMatrix d_merged =
+                train_matmul(
+                    d_residual,
+                    wo_transpose
+                );
+
+            TrainMatrix merged_transpose =
+                train_transpose(cache.merged);
+
+            TrainMatrix d_wo =
+                train_matmul(
+                    merged_transpose,
+                    d_residual
+                );
+
+            TrainMatrix d_q(length, d);
+            TrainMatrix d_k(length, d);
+            TrainMatrix d_v(length, d);
+
+            const double attention_scale =
+                1.0 / std::sqrt(static_cast<double>(head_dim));
+
+            for (std::size_t head = 0; head < heads; ++head) {
+                const std::size_t start = head * head_dim;
+
+                TrainMatrix qh =
+                    train_slice_columns(cache.q, start, head_dim);
+                TrainMatrix kh =
+                    train_slice_columns(cache.k, start, head_dim);
+                TrainMatrix vh =
+                    train_slice_columns(cache.v, start, head_dim);
+
+                TrainMatrix d_attended =
+                    train_slice_columns(
+                        d_merged,
+                        start,
+                        head_dim
+                    );
+
+                TrainMatrix vh_transpose =
+                    train_transpose(vh);
+                TrainMatrix d_probs =
+                    train_matmul(
+                        d_attended,
+                        vh_transpose
+                    );
+
+                TrainMatrix probs_transpose =
+                    train_transpose(
+                        cache.probabilities[head]
+                    );
+                TrainMatrix d_vh =
+                    train_matmul(
+                        probs_transpose,
+                        d_attended
+                    );
+
+                TrainMatrix d_scores =
+                    train_softmax_backward(
+                        cache.probabilities[head],
+                        d_probs
+                    );
+
+                for (std::size_t row = 0;
+                     row < d_scores.rows;
+                     ++row) {
+                    const double* d_scores_row =
+                        d_scores.row_ptr(row);
+                    double* q_row =
+                        d_scores.row_ptr(row);
+                    (void)q_row;
+                    for (std::size_t column = 0;
+                         column < d_scores.cols;
+                         ++column) {
+                        d_scores.at(row, column) *=
+                            attention_scale;
+                    }
+                }
+
+                TrainMatrix dk_transpose =
+                    train_matmul(
+                        train_transpose(d_scores),
+                        qh
+                    );
+                TrainMatrix dq_head =
+                    train_matmul(
+                        d_scores,
+                        kh
+                    );
+
+                for (std::size_t row = 0;
+                     row < d_vh.rows;
+                     ++row) {
+                    for (std::size_t column = 0;
+                         column < d_vh.cols;
+                         ++column) {
+                        d_vh.at(row, column) =
+                            d_vh.at(row, column);
+                    }
+                }
+
+                train_write_slice(
+                    d_q,
+                    dq_head,
+                    start
+                );
+                train_write_slice(
+                    d_k,
+                    dk_transpose,
+                    start
+                );
+                train_write_slice(
+                    d_v,
+                    d_vh,
+                    start
+                );
+            }
+
+            TrainMatrix wq_transpose = train_transpose(wq);
+            TrainMatrix wk_transpose = train_transpose(wk);
+            TrainMatrix wv_transpose = train_transpose(wv);
+
+            TrainMatrix d_norm_x_q =
+                train_matmul(d_q, wq_transpose);
+            TrainMatrix d_norm_x_k =
+                train_matmul(d_k, wk_transpose);
+            TrainMatrix d_norm_x_v =
+                train_matmul(d_v, wv_transpose);
+
+            TrainMatrix d_norm_x =
+                train_add(
+                    d_norm_x_q,
+                    train_add(d_norm_x_k, d_norm_x_v)
+                );
+
+            TrainMatrix norm_x_transpose =
+                train_transpose(cache.norm_x);
+
+            TrainMatrix d_wq =
+                train_matmul(
+                    norm_x_transpose,
+                    d_q
+                );
+            TrainMatrix d_wk =
+                train_matmul(
+                    norm_x_transpose,
+                    d_k
+                );
+            TrainMatrix d_wv =
+                train_matmul(
+                    norm_x_transpose,
+                    d_v
+                );
+
+            TrainMatrix d_input_norm =
+                train_layer_norm_backward(
+                    d_norm_x,
+                    cache.input,
+                    cache.mean1,
+                    cache.inv1
+                );
+
+            grad_x = d_input_norm;
+            train_add_inplace(grad_x, d_residual);
+
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 0],
+                d_wq,
+                1.0
+            );
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 1],
+                d_wk,
+                1.0
+            );
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 2],
+                d_wv,
+                1.0
+            );
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 3],
+                d_wo,
+                1.0
+            );
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 4],
+                d_w1,
+                1.0
+            );
+            train_accumulate_parameter_gradient(
+                parameter_gradients[base + 5],
+                d_w2,
+                1.0
+            );
+        }
+
+        for (std::size_t row = 0; row < length; ++row) {
+            const int token_id = token_ids[row];
+
+            double* token_gradient =
+                parameter_gradients[0].data() +
+                static_cast<std::size_t>(token_id) * d;
+            double* position_gradient =
+                parameter_gradients[1].data() +
+                row * d;
+
+            const double* grad_row =
+                grad_x.row_ptr(row);
+
+            for (std::size_t column = 0;
+                 column < d;
+                 ++column) {
+                token_gradient[column] += grad_row[column];
+                position_gradient[column] += grad_row[column];
+            }
+        }
+
+        for (std::size_t parameter = 0;
+             parameter < expected_parameters;
+             ++parameter) {
+            StorageObject* storage = parameters[parameter];
+            std::vector<double>& gradient =
+                parameter_gradients[parameter];
+
+            for (std::size_t index = 0;
+                 index < gradient.size();
+                 ++index) {
+                const double value = storage->values[index];
+
+                if (!std::isfinite(gradient[index])) {
+                    PyErr_SetString(
+                        PyExc_FloatingPointError,
+                        "non-finite transformer gradient"
+                    );
+                    return nullptr;
+                }
+
+                storage->values[index] -=
+                    learning_rate * gradient[index];
+            }
+
+            for (double value : storage->values) {
+                if (!std::isfinite(value)) {
+                    PyErr_SetString(
+                        PyExc_FloatingPointError,
+                        "non-finite transformer parameter after update"
+                    );
+                    return nullptr;
+                }
+            }
+        }
+
+        return PyFloat_FromDouble(
+            total_loss / static_cast<double>(length)
+        );
+    } catch (const std::bad_alloc&) {
+        PyErr_NoMemory();
+        return nullptr;
+    } catch (const std::exception& exc) {
+        PyErr_SetString(PyExc_RuntimeError, exc.what());
+        return nullptr;
+    }
+}
+
 PyMethodDef module_methods[] = {
     {"storage_from_flat", storage_from_flat, METH_VARARGS,
      "Create contiguous C++ storage."},
@@ -2030,6 +3289,8 @@ PyMethodDef module_methods[] = {
      "Cross-entropy forward and gradient."},
     {"sgd_step", cpp_sgd_step, METH_VARARGS,
      "In-place SGD step."},
+    {"transformer_train_step", cpp_transformer_train_step, METH_VARARGS,
+     "Fused Level 2 Transformer forward, backward, and SGD step."},
     {nullptr, nullptr, 0, nullptr}
 };
 
