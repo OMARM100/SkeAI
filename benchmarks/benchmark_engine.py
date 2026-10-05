@@ -34,6 +34,82 @@ def make_matrix(rows: int, cols: int, scale: float = 0.01) -> Tensor:
     )
 
 
+def profile_model_layers(
+    model: TinyCharacterLanguageModel,
+    inputs: Tensor,
+    targets: Tensor,
+    repeats: int = 5,
+) -> tuple[dict[str, float], dict[str, float], float, float]:
+    """Profile each model layer on the real training batch.
+
+    Returns average forward times, average backward times, loss-forward time,
+    and loss-backward time. The backward pass mirrors Trainer: the first Dense
+    layer skips input-gradient arithmetic.
+    """
+    forward_totals = {
+        f"layer{index}_{type(layer).__name__}_forward_ms": 0.0
+        for index, layer in enumerate(model.network.layers)
+    }
+    backward_totals = {
+        f"layer{index}_{type(layer).__name__}_backward_ms": 0.0
+        for index, layer in enumerate(model.network.layers)
+    }
+
+    loss_forward_total = 0.0
+    loss_backward_total = 0.0
+
+    for _ in range(repeats):
+        current = inputs
+
+        for index, layer in enumerate(model.network.layers):
+            start = perf_counter()
+            current = layer.forward(current)
+            elapsed = (perf_counter() - start) * 1000.0
+            forward_totals[
+                f"layer{index}_{type(layer).__name__}_forward_ms"
+            ] += elapsed
+
+        start = perf_counter()
+        loss = CrossEntropyLoss()
+        loss.forward(current, targets)
+        loss_forward_total += (perf_counter() - start) * 1000.0
+
+        start = perf_counter()
+        gradient = loss.backward()
+        loss_backward_total += (perf_counter() - start) * 1000.0
+
+        for index in range(len(model.network.layers) - 1, -1, -1):
+            layer = model.network.layers[index]
+            start = perf_counter()
+
+            if index == 0 and isinstance(layer, Dense):
+                gradient = layer.backward(
+                    gradient,
+                    compute_input_gradient=False,
+                )
+            else:
+                gradient = layer.backward(gradient)
+
+            elapsed = (perf_counter() - start) * 1000.0
+            backward_totals[
+                f"layer{index}_{type(layer).__name__}_backward_ms"
+            ] += elapsed
+
+    forward_averages = {
+        key: value / repeats for key, value in forward_totals.items()
+    }
+    backward_averages = {
+        key: value / repeats for key, value in backward_totals.items()
+    }
+
+    return (
+        forward_averages,
+        backward_averages,
+        loss_forward_total / repeats,
+        loss_backward_total / repeats,
+    )
+
+
 def main() -> None:
     print("=== SkeAI Engine Benchmark ===")
     print(f"python={platform.python_version()}")
@@ -155,6 +231,38 @@ def main() -> None:
         f"train_step_optimizer="
         f"{stage_totals['optimizer_ms'] / repeats:.3f}ms"
     )
+
+    print("=== Layer Profile ===")
+    profile_model = TinyCharacterLanguageModel(
+        tokenizer=tokenizer,
+        context_length=8,
+        hidden_size=32,
+    )
+
+    profile_forward, profile_backward, loss_forward, loss_backward = (
+        profile_model_layers(
+            profile_model,
+            inputs,
+            targets,
+            repeats=5,
+        )
+    )
+
+    for key, value in profile_forward.items():
+        print(f"{key}={value:.3f}ms")
+
+    print(f"loss_forward_profile={loss_forward:.3f}ms")
+
+    for key, value in profile_backward.items():
+        print(f"{key}={value:.3f}ms")
+
+    print(f"loss_backward_profile={loss_backward:.3f}ms")
+
+    forward_total = sum(profile_forward.values())
+    backward_total = sum(profile_backward.values())
+
+    print(f"profile_forward_layers_total={forward_total:.3f}ms")
+    print(f"profile_backward_layers_total={backward_total:.3f}ms")
     print(f"model_parameters={model.network.parameter_count()}")
 
 
