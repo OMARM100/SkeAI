@@ -126,7 +126,7 @@ def build_dialogue_samples(
             make_samples(
                 tokens,
                 context_length,
-                stride=max(1, context_length // 3),
+                stride=max(1, context_length // 2),
             )
         )
     return samples
@@ -397,7 +397,7 @@ def main() -> None:
     language_samples = make_samples(
         train_tokens,
         context_length,
-        stride=max(1, context_length // 2),
+        stride=context_length,
     )
     dialogue_samples = build_dialogue_samples(
         dialogue_conversations,
