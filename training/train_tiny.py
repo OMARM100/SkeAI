@@ -7,12 +7,16 @@ Run from the repository root:
 To continue training from the last checkpoint:
 
     python -m training.train_tiny --resume
+
+The script reports setup, training, checkpoint and total elapsed time so
+performance changes can be measured directly on the target device.
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from time import perf_counter
 
 from src.skeai.dataset import CharacterLanguageDataset
 from src.skeai.language_model import TinyCharacterLanguageModel
@@ -47,6 +51,8 @@ def load_model(resume: bool, text: str) -> TinyCharacterLanguageModel:
 
 
 def main() -> None:
+    total_start = perf_counter()
+
     parser = argparse.ArgumentParser(description="Train SkeAI tiny language model.")
     parser.add_argument(
         "--resume",
@@ -55,6 +61,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    setup_start = perf_counter()
     text = CORPUS_PATH.read_text(encoding="utf-8")
     model = load_model(args.resume, text)
 
@@ -68,28 +75,59 @@ def main() -> None:
         model=model.network,
         optimizer=SGD(learning_rate=0.05),
         loss=CrossEntropyLoss(),
+        enable_timing=True,
     )
 
     batches = dataset.all_batches(batch_size=16)
+    setup_seconds = perf_counter() - setup_start
 
     def report(epoch: int, batch: int, loss: float) -> None:
         if batch == 1 or epoch == 1:
             print(f"epoch={epoch:03d} batch={batch:02d} loss={loss:.6f}")
 
+    def report_epoch(
+        epoch: int,
+        loss: float,
+        elapsed_seconds: float,
+        examples_per_second: float,
+    ) -> None:
+        timing = trainer.last_step_timing
+        print(
+            f"epoch={epoch:03d} time={elapsed_seconds:.4f}s "
+            f"avg_step={trainer.last_epoch_timing['average_step_ms']:.3f}ms "
+            f"examples/s={examples_per_second:.2f} "
+            f"last_step=[forward:{timing['forward_ms']:.3f}ms "
+            f"loss:{timing['loss_ms']:.3f}ms "
+            f"backward:{timing['backward_ms']:.3f}ms "
+            f"optimizer:{timing['optimizer_ms']:.3f}ms]"
+        )
+
+    training_start = perf_counter()
     history = trainer.train_batches(
         batches,
         epochs=50,
         callback=report,
+        epoch_callback=report_epoch,
     )
+    training_seconds = perf_counter() - training_start
 
+    checkpoint_start = perf_counter()
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     model.save_checkpoint(CHECKPOINT_PATH)
+    checkpoint_seconds = perf_counter() - checkpoint_start
+
+    total_seconds = perf_counter() - total_start
 
     print(f"checkpoint={CHECKPOINT_PATH}")
     print(f"vocabulary_size={model.tokenizer.vocab_size}")
     print(f"training_examples={len(dataset)}")
+    print(f"parameter_count={model.network.parameter_count()}")
     print(f"initial_loss={history[0]:.6f}")
     print(f"final_loss={history[-1]:.6f}")
+    print(f"setup_seconds={setup_seconds:.4f}")
+    print(f"training_seconds={training_seconds:.4f}")
+    print(f"checkpoint_seconds={checkpoint_seconds:.4f}")
+    print(f"total_seconds={total_seconds:.4f}")
 
     for prompt in ["hello", "مرحبا", "I ", "أنا "]:
         print(f"{prompt!r} -> {model.generate(prompt, max_new_tokens=24)}")
