@@ -73,6 +73,20 @@ def matmul(left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: 
         left, right, int(rows), int(inner), int(right_rows), int(cols)
     )
 
+
+def matmul_baseline(
+    left: Any,
+    right: Any,
+    rows: int,
+    inner: int,
+    right_rows: int,
+    cols: int,
+) -> Any:
+    """Run the retained reference GEMM kernel (primarily for validation/benchmarks)."""
+    return _require_cpp().matmul_baseline(
+        left, right, int(rows), int(inner), int(right_rows), int(cols)
+    )
+
 def causal_softmax(storage: Any, rows: int, cols: int) -> Any:
     return _require_cpp().causal_softmax(storage, int(rows), int(cols))
 

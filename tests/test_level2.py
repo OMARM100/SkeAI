@@ -196,6 +196,40 @@ class Level2TransformerTests(unittest.TestCase):
         numerical = (plus - minus) / (2.0 * epsilon)
         self.assertAlmostEqual(analytic, numerical, places=3)
 
+    def test_native_training_step_is_deterministic(self) -> None:
+        config = TransformerConfig(
+            context_length=4,
+            d_model=8,
+            n_heads=2,
+            feed_forward_size=16,
+            n_layers=1,
+            max_vocab_size=16,
+            seed=23,
+        )
+        inputs = [1, 2, 3, 4]
+        targets = [2, 3, 4, 5]
+
+        model_a = TinyTransformerLM(vocab_size=8, config=config)
+        model_b = TinyTransformerLM(vocab_size=8, config=config)
+        trainer_a = Level2Trainer(
+            model=model_a,
+            optimizer=SGD(learning_rate=0.003),
+        )
+        trainer_b = Level2Trainer(
+            model=model_b,
+            optimizer=SGD(learning_rate=0.003),
+        )
+
+        loss_a = trainer_a.train_step(inputs, targets)
+        loss_b = trainer_b.train_step(inputs, targets)
+        self.assertAlmostEqual(loss_a, loss_b, places=12)
+
+        for parameter_a, parameter_b in zip(
+            model_a.parameters().values(),
+            model_b.parameters().values(),
+        ):
+            self.assertEqual(parameter_a.to_list(), parameter_b.to_list())
+
     def test_native_batch_training_matches_sequential_updates(self) -> None:
         config = TransformerConfig(
             context_length=6,

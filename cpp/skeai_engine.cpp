@@ -461,7 +461,58 @@ PyObject* cpp_scalar_divide(PyObject*, PyObject* args) {
     return reinterpret_cast<PyObject*>(output);
 }
 
-PyObject* cpp_matmul(PyObject*, PyObject* args) {
+using MatmulKernel = void (*)(
+    const double*,
+    const double*,
+    double*,
+    std::size_t,
+    std::size_t,
+    std::size_t
+);
+
+// The original row-major GEMM kernel is deliberately retained as a reference.
+// Output storage is value-initialized to zeros by create_storage().
+void matmul_baseline_kernel(
+    const double* left,
+    const double* right,
+    double* output,
+    std::size_t rows,
+    std::size_t inner,
+    std::size_t cols
+) {
+    for (std::size_t row = 0; row < rows; ++row) {
+        const double* left_row = left + row * inner;
+        double* output_row = output + row * cols;
+
+        for (std::size_t k = 0; k < inner; ++k) {
+            const double value = left_row[k];
+            const double* right_row = right + k * cols;
+
+            for (std::size_t column = 0; column < cols; ++column) {
+                output_row[column] += value * right_row[column];
+            }
+        }
+    }
+}
+
+// Stage A intentionally dispatches to the reference kernel. A measured
+// optimized dispatch can be introduced later without deleting the baseline.
+void matmul_dispatch_kernel(
+    const double* left,
+    const double* right,
+    double* output,
+    std::size_t rows,
+    std::size_t inner,
+    std::size_t cols
+) {
+    matmul_baseline_kernel(left, right, output, rows, inner, cols);
+}
+
+PyObject* cpp_matmul_impl(
+    PyObject* args,
+    MatmulKernel kernel,
+    const char* method_name
+) {
     PyObject* left_object = nullptr;
     PyObject* right_object = nullptr;
     Py_ssize_t rows;
@@ -469,9 +520,11 @@ PyObject* cpp_matmul(PyObject*, PyObject* args) {
     Py_ssize_t right_rows;
     Py_ssize_t cols;
 
+    char format[96];
+    std::snprintf(format, sizeof(format), "OOnnnn:%s", method_name);
     if (!PyArg_ParseTuple(
         args,
-        "OOnnnn:matmul",
+        format,
         &left_object,
         &right_object,
         &rows,
@@ -525,27 +578,30 @@ PyObject* cpp_matmul(PyObject*, PyObject* args) {
     const std::size_t inner_u = static_cast<std::size_t>(inner);
     const std::size_t cols_u = static_cast<std::size_t>(cols);
 
-    Py_BEGIN_ALLOW_THREADS
-    for (std::size_t row = 0; row < rows_u; ++row) {
-        const double* left_row =
-            left->values.data() + row * inner_u;
-        double* output_row =
-            output->values.data() + row * cols_u;
-
-        for (std::size_t k = 0; k < inner_u; ++k) {
-            const double value = left_row[k];
-            const double* right_row =
-                right->values.data() + k * cols_u;
-
-            for (std::size_t column = 0; column < cols_u; ++column) {
-                output_row[column] +=
-                    value * right_row[column];
-            }
-        }
+    // Empty dimensions need no kernel call; this also avoids pointer arithmetic
+    // on empty vector storage.
+    if (rows_u != 0 && inner_u != 0 && cols_u != 0) {
+        Py_BEGIN_ALLOW_THREADS
+        kernel(
+            left->values.data(),
+            right->values.data(),
+            output->values.data(),
+            rows_u,
+            inner_u,
+            cols_u
+        );
+        Py_END_ALLOW_THREADS
     }
-    Py_END_ALLOW_THREADS
 
     return reinterpret_cast<PyObject*>(output);
+}
+
+PyObject* cpp_matmul(PyObject*, PyObject* args) {
+    return cpp_matmul_impl(args, matmul_dispatch_kernel, "matmul");
+}
+
+PyObject* cpp_matmul_baseline(PyObject*, PyObject* args) {
+    return cpp_matmul_impl(args, matmul_baseline_kernel, "matmul_baseline");
 }
 
 PyObject* cpp_transpose(PyObject*, PyObject* args) {
@@ -3901,6 +3957,8 @@ PyMethodDef module_methods[] = {
      "Scalar tensor division."},
     {"matmul", cpp_matmul, METH_VARARGS,
      "Matrix multiplication."},
+    {"matmul_baseline", cpp_matmul_baseline, METH_VARARGS,
+     "Reference row-major matrix multiplication kernel."},
     {"causal_softmax", cpp_causal_softmax, METH_VARARGS,
      "Causal row-wise softmax kernel."},
     {"softmax_backward", cpp_softmax_backward, METH_VARARGS,
