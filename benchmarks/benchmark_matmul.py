@@ -108,6 +108,11 @@ def main() -> None:
         dispatch_call = lambda: engine.matmul(
             left, right, rows, inner, inner, cols
         )
+        tiled_calls = {
+            16: lambda: engine.matmul_tiled_16(left, right, rows, inner, inner, cols),
+            32: lambda: engine.matmul_tiled_32(left, right, rows, inner, inner, cols),
+            64: lambda: engine.matmul_tiled_64(left, right, rows, inner, inner, cols),
+        }
 
         expected = _reference_matmul(
             left_values,
@@ -118,16 +123,25 @@ def main() -> None:
         )
         baseline_values = engine.storage_to_flat(baseline_call())
         dispatch_values = engine.storage_to_flat(dispatch_call())
+        tiled_values = {
+            tile: engine.storage_to_flat(call())
+            for tile, call in tiled_calls.items()
+        }
         baseline_error = _max_abs_error(baseline_values, expected)
         dispatch_error = _max_abs_error(dispatch_values, expected)
         baseline_dispatch_error = _max_abs_error(
             baseline_values,
             dispatch_values,
         )
+        tiled_errors = {
+            tile: _max_abs_error(values, expected)
+            for tile, values in tiled_values.items()
+        }
 
         for actual, reference in (
             (baseline_values, expected),
             (dispatch_values, expected),
+            *[(values, expected) for values in tiled_values.values()],
         ):
             if any(
                 not math.isclose(value, target, rel_tol=1e-9, abs_tol=1e-10)
@@ -144,6 +158,10 @@ def main() -> None:
         dispatch_median, dispatch_min, dispatch_max = _measure(
             dispatch_call, args.warmup, args.repeats
         )
+        tiled_timings = {
+            tile: _measure(call, args.warmup, args.repeats)
+            for tile, call in tiled_calls.items()
+        }
         speedup = baseline_median / max(dispatch_median, 1e-12)
 
         print(
@@ -166,6 +184,14 @@ def main() -> None:
             f"dispatch_max_abs_error={dispatch_error:.12g} "
             f"baseline_dispatch_max_abs_error={baseline_dispatch_error:.12g}"
         )
+        for tile in (16, 32, 64):
+            median_ms, min_ms, max_ms = tiled_timings[tile]
+            print(
+                f"  tile={tile} median_ms={median_ms:.6f} "
+                f"min_ms={min_ms:.6f} max_ms={max_ms:.6f} "
+                f"baseline_over_tile={baseline_median / max(median_ms, 1e-12):.4f}x "
+                f"max_abs_error={tiled_errors[tile]:.12g}"
+            )
 
     print("correctness=PASS")
 
