@@ -87,6 +87,39 @@ def matmul_baseline(
         left, right, int(rows), int(inner), int(right_rows), int(cols)
     )
 
+def _matmul_tiled(
+    method_name: str,
+    left: Any,
+    right: Any,
+    rows: int,
+    inner: int,
+    right_rows: int,
+    cols: int,
+) -> Any:
+    """Run an explicit native tiled GEMM kernel for isolated benchmarks."""
+    return getattr(_require_cpp(), method_name)(
+        left, right, int(rows), int(inner), int(right_rows), int(cols)
+    )
+
+
+def matmul_tiled_16(
+    left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: int
+) -> Any:
+    return _matmul_tiled("matmul_tiled_16", left, right, rows, inner, right_rows, cols)
+
+
+def matmul_tiled_32(
+    left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: int
+) -> Any:
+    return _matmul_tiled("matmul_tiled_32", left, right, rows, inner, right_rows, cols)
+
+
+def matmul_tiled_64(
+    left: Any, right: Any, rows: int, inner: int, right_rows: int, cols: int
+) -> Any:
+    return _matmul_tiled("matmul_tiled_64", left, right, rows, inner, right_rows, cols)
+
+
 def causal_softmax(storage: Any, rows: int, cols: int) -> Any:
     return _require_cpp().causal_softmax(storage, int(rows), int(cols))
 
