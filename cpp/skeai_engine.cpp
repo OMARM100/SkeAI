@@ -505,9 +505,9 @@ void matmul_tiled_kernel(
     double* output,
     std::size_t rows,
     std::size_t inner,
-    std::size_t cols
+    std::size_t cols,
+    std::size_t tile
 ) {
-    constexpr std::size_t tile = 32;
 
     for (std::size_t row_start = 0; row_start < rows; row_start += tile) {
         const std::size_t row_end = std::min(row_start + tile, rows);
@@ -534,6 +534,28 @@ void matmul_tiled_kernel(
     }
 }
 
+// Benchmark-only entry points compare tile sizes without changing production dispatch.
+void matmul_tiled_16_kernel(
+    const double* left, const double* right, double* output,
+    std::size_t rows, std::size_t inner, std::size_t cols
+) {
+    matmul_tiled_kernel(left, right, output, rows, inner, cols, 16);
+}
+
+void matmul_tiled_32_kernel(
+    const double* left, const double* right, double* output,
+    std::size_t rows, std::size_t inner, std::size_t cols
+) {
+    matmul_tiled_kernel(left, right, output, rows, inner, cols, 32);
+}
+
+void matmul_tiled_64_kernel(
+    const double* left, const double* right, double* output,
+    std::size_t rows, std::size_t inner, std::size_t cols
+) {
+    matmul_tiled_kernel(left, right, output, rows, inner, cols, 64);
+}
+
 // Keep tiny and medium operations on the simple reference kernel: tiling has
 // loop overhead, so only dispatch to it when the arithmetic workload is large
 // enough to plausibly benefit from improved cache locality.
@@ -552,7 +574,7 @@ void matmul_dispatch_kernel(
         static_cast<long double>(cols);
 
     if (work >= static_cast<long double>(tiled_work_threshold)) {
-        matmul_tiled_kernel(left, right, output, rows, inner, cols);
+        matmul_tiled_kernel(left, right, output, rows, inner, cols, 32);
     } else {
         matmul_baseline_kernel(left, right, output, rows, inner, cols);
     }
@@ -652,6 +674,18 @@ PyObject* cpp_matmul(PyObject*, PyObject* args) {
 
 PyObject* cpp_matmul_baseline(PyObject*, PyObject* args) {
     return cpp_matmul_impl(args, matmul_baseline_kernel, "matmul_baseline");
+}
+
+PyObject* cpp_matmul_tiled_16(PyObject*, PyObject* args) {
+    return cpp_matmul_impl(args, matmul_tiled_16_kernel, "matmul_tiled_16");
+}
+
+PyObject* cpp_matmul_tiled_32(PyObject*, PyObject* args) {
+    return cpp_matmul_impl(args, matmul_tiled_32_kernel, "matmul_tiled_32");
+}
+
+PyObject* cpp_matmul_tiled_64(PyObject*, PyObject* args) {
+    return cpp_matmul_impl(args, matmul_tiled_64_kernel, "matmul_tiled_64");
 }
 
 PyObject* cpp_transpose(PyObject*, PyObject* args) {
@@ -4009,6 +4043,12 @@ PyMethodDef module_methods[] = {
      "Matrix multiplication."},
     {"matmul_baseline", cpp_matmul_baseline, METH_VARARGS,
      "Reference row-major matrix multiplication kernel."},
+    {"matmul_tiled_16", cpp_matmul_tiled_16, METH_VARARGS,
+     "Cache-blocked GEMM using a 16-element tile (benchmarking)."},
+    {"matmul_tiled_32", cpp_matmul_tiled_32, METH_VARARGS,
+     "Cache-blocked GEMM using a 32-element tile (benchmarking)."},
+    {"matmul_tiled_64", cpp_matmul_tiled_64, METH_VARARGS,
+     "Cache-blocked GEMM using a 64-element tile (benchmarking)."},
     {"causal_softmax", cpp_causal_softmax, METH_VARARGS,
      "Causal row-wise softmax kernel."},
     {"softmax_backward", cpp_softmax_backward, METH_VARARGS,
