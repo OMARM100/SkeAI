@@ -19,13 +19,40 @@ The foundation includes:
 - Training telemetry and repeatable benchmarks.
 - Automated tests through GitHub Actions.
 
-## Build the C++ engine
+## Build and test
 
-From the repository root:
+From the repository root, the Makefile provides the same entry points on Linux and Termux:
+
+    make check-sources
+    make build
+    make test
+    make info
+    make clean
+
+- `make check-sources` discovers Python, C/C++, header, and assembly source files and checks Python syntax.
+- `make build` builds the native C++ extension and byte-compiles Python modules.
+- `make test` runs source checks, builds the extension, and runs the full unittest suite.
+- `make info` lists recognized source files.
+- `make clean` removes generated Python bytecode and the local native extension.
+
+The native extension is built by:
 
     python -m tools.build_cpp
 
-The build creates a platform-specific _cpp extension inside src/skeai/.
+It creates a platform-specific _cpp extension inside src/skeai/.
+
+### Termux setup
+
+Install the available toolchain packages:
+
+    pkg update
+    pkg install python clang make git
+
+Then run:
+
+    make test
+
+If the native build reports that the Python library or headers are missing, keep the full error output; Termux's Python packaging differs from desktop Linux and the build script may need a platform-specific adjustment.
 
 Python remains responsible for high-level model orchestration and the public API. C++ owns the scalar tensor storage and executes the numerical kernels.
 
