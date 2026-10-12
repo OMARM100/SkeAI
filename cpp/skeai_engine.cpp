@@ -495,8 +495,48 @@ void matmul_baseline_kernel(
     }
 }
 
-// Stage A intentionally dispatches to the reference kernel. A measured
-// optimized dispatch can be introduced later without deleting the baseline.
+// Cache-blocked row-major GEMM. The k tiles are processed in ascending
+// order, so each output element accumulates products in the same k order as
+// the baseline kernel. A 32-element tile is deliberately conservative for
+// mobile CPUs and double-precision storage.
+void matmul_tiled_kernel(
+    const double* left,
+    const double* right,
+    double* output,
+    std::size_t rows,
+    std::size_t inner,
+    std::size_t cols
+) {
+    constexpr std::size_t tile = 32;
+
+    for (std::size_t row_start = 0; row_start < rows; row_start += tile) {
+        const std::size_t row_end = std::min(row_start + tile, rows);
+        for (std::size_t k_start = 0; k_start < inner; k_start += tile) {
+            const std::size_t k_end = std::min(k_start + tile, inner);
+            for (std::size_t col_start = 0; col_start < cols; col_start += tile) {
+                const std::size_t col_end = std::min(col_start + tile, cols);
+
+                for (std::size_t row = row_start; row < row_end; ++row) {
+                    const double* left_row = left + row * inner;
+                    double* output_row = output + row * cols;
+                    for (std::size_t k = k_start; k < k_end; ++k) {
+                        const double value = left_row[k];
+                        const double* right_row = right + k * cols;
+                        for (std::size_t column = col_start;
+                             column < col_end;
+                             ++column) {
+                            output_row[column] += value * right_row[column];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Keep tiny and medium operations on the simple reference kernel: tiling has
+// loop overhead, so only dispatch to it when the arithmetic workload is large
+// enough to plausibly benefit from improved cache locality.
 void matmul_dispatch_kernel(
     const double* left,
     const double* right,
@@ -505,7 +545,17 @@ void matmul_dispatch_kernel(
     std::size_t inner,
     std::size_t cols
 ) {
-    matmul_baseline_kernel(left, right, output, rows, inner, cols);
+    constexpr std::size_t tiled_work_threshold = 1000000;
+    const long double work =
+        static_cast<long double>(rows) *
+        static_cast<long double>(inner) *
+        static_cast<long double>(cols);
+
+    if (work >= static_cast<long double>(tiled_work_threshold)) {
+        matmul_tiled_kernel(left, right, output, rows, inner, cols);
+    } else {
+        matmul_baseline_kernel(left, right, output, rows, inner, cols);
+    }
 }
 
 PyObject* cpp_matmul_impl(
