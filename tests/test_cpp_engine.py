@@ -92,6 +92,34 @@ class CppEngineTests(unittest.TestCase):
                 for actual, expected in zip(dispatched, reference):
                     self.assertAlmostEqual(actual, expected, places=8)
 
+    def test_tiled_matmul_dispatch_matches_baseline_at_threshold(self) -> None:
+        # 100x100x100 reaches the dispatch threshold and exercises the tiled
+        # implementation while keeping the test deterministic and reproducible.
+        rows = inner = cols = 100
+        left_values = [
+            [((row * 7 + col * 3) % 19 - 9) / 7.0 for col in range(inner)]
+            for row in range(rows)
+        ]
+        right_values = [
+            [((row * 5 + col * 11) % 23 - 11) / 9.0 for col in range(cols)]
+            for row in range(inner)
+        ]
+        left = Tensor(left_values)
+        right = Tensor(right_values)
+
+        baseline = matmul_baseline(
+            left._storage,
+            right._storage,
+            rows,
+            inner,
+            inner,
+            cols,
+        ).to_list()
+        dispatched = left.matmul(right).flatten()
+
+        self.assertEqual(len(dispatched), rows * cols)
+        self.assertEqual(dispatched, baseline)
+
     def test_matmul_baseline_rejects_invalid_dimensions_and_storage(self) -> None:
         left = storage_from_flat([1.0, 2.0])
         right = storage_from_flat([3.0, 4.0, 5.0, 6.0])
