@@ -5,6 +5,9 @@ from src.skeai.engine import (
     NATIVE_AVAILABLE,
     SCALAR_TYPE,
     matmul_baseline,
+    matmul_tiled_16,
+    matmul_tiled_32,
+    matmul_tiled_64,
     storage_from_flat,
 )
 from src.skeai.layers import Dense
@@ -119,6 +122,39 @@ class CppEngineTests(unittest.TestCase):
 
         self.assertEqual(len(dispatched), rows * cols)
         self.assertEqual(dispatched, baseline)
+
+    def test_tiled_kernel_variants_match_baseline(self) -> None:
+        # Include irregular dimensions and a workload above the production
+        # dispatch threshold; all variants preserve ascending-k accumulation.
+        for rows, inner, cols in ((17, 19, 21), (100, 100, 100)):
+            left_values = [
+                [((row * 7 + col * 3) % 19 - 9) / 7.0 for col in range(inner)]
+                for row in range(rows)
+            ]
+            right_values = [
+                [((row * 5 + col * 11) % 23 - 11) / 9.0 for col in range(cols)]
+                for row in range(inner)
+            ]
+            left = storage_from_flat(
+                [value for row in left_values for value in row]
+            )
+            right = storage_from_flat(
+                [value for row in right_values for value in row]
+            )
+            baseline = matmul_baseline(
+                left, right, rows, inner, inner, cols
+            ).to_list()
+
+            for tile, kernel in (
+                (16, matmul_tiled_16),
+                (32, matmul_tiled_32),
+                (64, matmul_tiled_64),
+            ):
+                with self.subTest(shape=(rows, inner, cols), tile=tile):
+                    actual = kernel(
+                        left, right, rows, inner, inner, cols
+                    ).to_list()
+                    self.assertEqual(actual, baseline)
 
     def test_matmul_baseline_rejects_invalid_dimensions_and_storage(self) -> None:
         left = storage_from_flat([1.0, 2.0])
