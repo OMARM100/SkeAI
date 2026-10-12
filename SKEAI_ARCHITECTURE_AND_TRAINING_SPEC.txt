@@ -1,0 +1,417 @@
+SKEAI — COMPLETE ARCHITECTURE AND TRAINING SPECIFICATION
+Repository: https://github.com/OMARM100/SkeAI
+Target branch: main
+Purpose: A plain-text handoff document for an AI engineer/developer who will inspect, improve, and extend SkeAI.
+
+======================================================================
+1. PROJECT GOAL AND CURRENT REALITY
+======================================================================
+
+SkeAI is an experimental AI project built from scratch to learn how a small neural language model and its numerical engine work.
+
+The current main branch is the "SkeAI 0.4 — C++ engine foundation" milestone. It is NOT yet a production-grade conversational assistant and it is NOT a large Transformer model. Do not describe future plans or code from other branches as if they already exist on main.
+
+Current language-model design:
+- Character-level Arabic/English tokenizer.
+- Fixed-length context for next-character prediction.
+- Small feed-forward neural network.
+- Cross-entropy loss.
+- Stochastic gradient descent (SGD), with optional weight decay.
+- Checkpoint saving/loading and resume training.
+- Native C++ numerical backend exposed to Python through a CPython extension.
+- Tests and end-to-end benchmarks.
+
+Important current limitation:
+A successful training run or a falling training loss does not, by itself, prove that the model can hold a useful conversation or generalize. Always evaluate on held-out validation text and generated samples.
+
+======================================================================
+2. CURRENT REPOSITORY STRUCTURE (MAIN)
+======================================================================
+
+README.md
+    Project stage, build/run/test instructions, architecture principles.
+
+cpp/
+    skeai_engine.cpp
+        Native C++ numerical engine and CPython extension implementation.
+
+src/skeai/
+    __init__.py
+        Package entry point.
+    _cpp*.so
+        Platform-specific compiled extension generated locally; do not commit
+        a machine-specific binary unless the repository policy explicitly says so.
+    engine.py
+        Python boundary/wrapper for the native C++ numerical functions.
+    tensor.py
+        Tensor metadata/shape API backed by C++-owned contiguous storage.
+    layers.py
+        Neural-network layers (including Dense and activation layers).
+    model.py
+        Sequential model; runs layers forward and backward.
+    tokenizer.py
+        Character-level Unicode tokenizer and vocabulary handling.
+    dataset.py
+        Sliding-window next-character dataset and mini-batch creation.
+    language_model.py
+        TinyCharacterLanguageModel, context encoding, inference/generation,
+        and model checkpoint operations.
+    loss.py
+        Loss APIs including CrossEntropyLoss and MeanSquaredError.
+    optimizer.py
+        SGD optimizer that delegates scalar parameter updates to C++.
+    trainer.py
+        Training loop, forward/loss/backward/update flow, timing telemetry.
+    benchmark.py
+        Benchmark helpers used by the benchmark command.
+
+training/
+    train_tiny.py
+        Training entry point, CLI arguments, data loading, validation,
+        training loop setup, reporting, and checkpoint output.
+
+benchmarks/
+    benchmark_engine.py
+        Measures matrix multiplication, dense operations, training steps,
+        and component/parameter timing.
+
+tools/
+    build_cpp.py
+        Builds the native C++ extension for the current Python/platform.
+
+data/samples/
+    tiny_corpus.txt
+        Training text used by the tiny model.
+    tiny_validation.txt
+        Held-out validation text.
+    tiny_character_coverage.txt
+        Extra text used to ensure the tokenizer covers intended characters.
+
+models/
+    tiny_character_model.json
+        Saved model/tokenizer state produced by training. The file is generated
+        by training and may not be present in a clean checkout until training.
+
+tests/
+    Automated tests for the numerical engine, tensors, model, tokenizer,
+    training, checkpoints, and related behaviour. Inspect actual filenames
+    before changing or adding tests.
+
+The list above describes the main architecture and key verified paths. Always
+inspect the repository before assuming every path is present in a given commit.
+
+======================================================================
+3. CURRENT MODEL ARCHITECTURE
+======================================================================
+
+Class: TinyCharacterLanguageModel
+Implementation: src/skeai/language_model.py
+
+Tokenizer:
+- CharacterTokenizer maps Unicode characters to integer token IDs.
+- Special tokens include PAD, UNK, BOS, and EOS.
+- The vocabulary is fitted from the training corpus and character-coverage data.
+- This is character-level tokenization, not word-level or subword tokenization.
+
+Training example:
+- The encoded text is framed with BOS/EOS special tokens.
+- For each position, the preceding CONTEXT_LENGTH token IDs are the input.
+- The next token ID is the target.
+- This is a fixed-window next-character language-modeling objective.
+
+Context encoding:
+- Each token in the context is represented as a one-hot vector over the vocabulary.
+- The vectors for all context positions are flattened into one feature vector.
+- The input width is CONTEXT_LENGTH * VOCAB_SIZE.
+- This design is simple and transparent but may consume substantial computation
+  and memory as context length and vocabulary grow.
+
+Neural network:
+    Input: flattened one-hot context
+        |
+        v
+    Dense(CONTEXT_LENGTH * VOCAB_SIZE, HIDDEN_SIZE)
+        |
+        v
+    Tanh activation
+        |
+        v
+    Dense(HIDDEN_SIZE, VOCAB_SIZE)
+        |
+        v
+    Logits for the next character
+        |
+        v
+    Softmax + Cross-Entropy calculation
+    (softmax and loss gradient are calculated by the native C++ kernel)
+
+Parameter count for the current two-Dense-layer model is:
+    (CONTEXT_LENGTH * VOCAB_SIZE * HIDDEN_SIZE)
+    + HIDDEN_SIZE
+    + (HIDDEN_SIZE * VOCAB_SIZE)
+    + VOCAB_SIZE
+
+This expression includes both weight matrices and both bias vectors.
+
+Default values currently found in training/train_tiny.py:
+- CONTEXT_LENGTH = 16
+- HIDDEN_SIZE = 32
+- BATCH_SIZE = 16
+- LEARNING_RATE = 0.05
+- WEIGHT_DECAY = 0.001
+- DEFAULT_EPOCHS = 100
+- DEFAULT_PATIENCE = 8
+- DEFAULT_MIN_DELTA = 0.001
+- Batch logging interval = 50
+
+These are current source defaults, not universal recommendations. Inspect the code before assuming values did not change.
+
+======================================================================
+4. CURRENT LEARNING METHOD — TRAINING STEP
+======================================================================
+
+The current training algorithm is supervised next-character prediction with
+mini-batch gradient descent (SGD).
+
+For every mini-batch:
+1. Build a fixed-context input for each example and its next-character target.
+2. Run the network forward to produce logits.
+3. Compute softmax cross-entropy loss against the integer target IDs.
+4. Calculate the gradient of the loss.
+5. Backpropagate gradients through the network layers.
+6. Update parameters using SGD:
+       parameter := parameter - learning_rate *
+                    (gradient + weight_decay * parameter)
+7. Record timing/loss telemetry when enabled.
+
+The native cross-entropy kernel uses numerically stable softmax by subtracting
+the row maximum before exponentiation, normalizes probabilities, computes
+cross-entropy, and writes the corresponding gradient.
+
+Validation:
+- Training and validation texts are separate files.
+- Use validation loss as a held-out generalization signal.
+- Early-stopping/patience settings can stop training when validation does not
+  improve enough.
+- Do not choose a model solely by the final training loss.
+- Do not use validation text as training data.
+
+Checkpoint:
+- The training entry point uses JSON checkpoint storage.
+- Resume training is supported with the --resume option.
+- Preserve backwards compatibility where possible; if a checkpoint format
+  must change, add versioning or a migration path and tests.
+
+======================================================================
+5. WHAT IS IMPLEMENTED IN C++ AND WHAT REMAINS IN PYTHON
+======================================================================
+
+Python currently handles:
+- Training command/CLI and orchestration.
+- High-level model/layer structure.
+- Dataset creation and mini-batch preparation.
+- Tokenizer and text handling.
+- Checkpoint serialization and public interfaces.
+- Calling native numerical kernels and reporting metrics.
+
+C++ owns contiguous tensor scalar storage (std::vector<double>) and implements
+the native numerical operations. The Python extension is built from
+cpp/skeai_engine.cpp and exposed via src/skeai/engine.py.
+
+Native operations exposed include:
+- Storage construction, zero-initialization, copying, and conversion to a list.
+- Elementwise tensor addition/subtraction/multiplication.
+- Scalar arithmetic operations.
+- Matrix multiplication and transpose.
+- Dense forward and backward kernels.
+- ReLU and Tanh forward/backward kernels.
+- Mean-squared-error forward/backward.
+- Softmax cross-entropy loss and gradient.
+- In-place SGD parameter updates.
+
+Numeric type:
+- The current native storage uses C++ double, corresponding to float64.
+
+Build:
+    python -m tools.build_cpp
+
+Test:
+    python -m unittest discover -s tests -v
+
+Benchmark:
+    python -m benchmarks.benchmark_engine
+
+Train a fresh tiny model:
+    python -m training.train_tiny
+
+Resume from checkpoint:
+    python -m training.train_tiny --resume
+
+Always run the native build before tests/training if the compiled extension is
+missing or after changing C++ sources.
+
+======================================================================
+6. PERFORMANCE OBJECTIVE
+======================================================================
+
+Long-term objective: train more useful models faster on limited hardware,
+including low-memory Android/Termux and CPU-only systems.
+
+A target such as "one million parameters trained in one or two minutes" is a
+performance goal to test, not a guaranteed outcome. Parameter count alone does
+not determine training time. Runtime also depends on:
+- sequence/context length;
+- vocabulary size;
+- hidden dimensions and architecture;
+- number of training examples and tokens;
+- batch size and number of optimizer steps;
+- forward/backward computation;
+- memory allocation and memory bandwidth;
+- CPU architecture, compiler, and thermal throttling;
+- validation frequency and checkpoint-writing time.
+
+Measure at least:
+- model parameter count;
+- training examples and tokens processed;
+- batch size and optimizer steps;
+- total setup/training/validation/checkpoint time;
+- forward, loss, backward, and optimizer time where available;
+- examples/second and tokens/second;
+- training loss and validation loss;
+- memory usage where the platform supports reliable measurement.
+
+A kernel-only speedup is not enough. The full training-step and end-to-end
+training timings must also improve.
+
+======================================================================
+7. OPENAI PAPER: MATRIX MULTIPLICATION EXPONENT 9/4
+======================================================================
+
+Reference title shown in the provided paper image:
+"An Upper Bound of 9/4 for the Matrix Multiplication Exponent"
+OpenAI, dated October 2, 2026.
+
+The stated mathematical result concerns the asymptotic exponent for multiplying
+square matrices over the complex numbers. It establishes an upper bound of
+9/4 (with an arbitrarily small positive epsilon in the asymptotic statement).
+
+This is a theoretical complexity result. It is NOT by itself a drop-in C++
+kernel, a promise of a specific wall-clock speedup, or proof that the current
+SkeAI workload will become faster.
+
+Before attempting to use the result:
+1. Obtain and carefully read the original paper and its algorithmic details.
+2. Identify the assumptions, arithmetic model, constants, memory requirements,
+   numerical stability, and practical matrix-size regime.
+3. Confirm whether the constructions can apply to real float64 arithmetic
+   or be adapted while preserving acceptable numerical accuracy.
+4. Do not claim the theoretical exponent has been implemented unless the
+   actual algorithm has been implemented and verified.
+5. Keep the existing matrix multiplication kernel as a correctness baseline.
+6. Compare candidate algorithms against the baseline over representative matrix
+   dimensions used by the actual training workload.
+7. Benchmark on the target CPU; asymptotic operation counts do not replace
+   measurements.
+8. Verify output against the baseline with explicit numerical tolerances.
+9. Run all tests and an end-to-end training benchmark before accepting changes.
+
+Practical optimization candidates worth benchmarking first may include better
+loop ordering, cache blocking/tiling, reuse of intermediate buffers, reducing
+allocations/copies, fusing kernels, and compiler optimization. Do not assume
+any of these wins without measurements. An asymptotically faster algorithm can
+be slower for small matrices because of overhead and extra additions.
+
+A sensible design may use a size-based dispatch:
+- small matrices: simple baseline kernel;
+- medium/large matrices: a candidate optimized kernel only after it wins in
+  repeatable benchmarks and passes correctness/numerical tests.
+
+======================================================================
+8. RULES FOR ANY AI/DEVELOPER WHO CONTINUES THIS PROJECT
+======================================================================
+
+A. Inspect the current main branch and actual source files before coding.
+B. Do not invent functions, modules, training results, or benchmark numbers.
+C. Keep Python out of native arithmetic kernels; use Python for orchestration
+   and high-level interfaces unless an approved architectural change says
+   otherwise.
+D. Preserve the C++-owned contiguous storage model unless measurements justify
+   a carefully tested change.
+E. Do not introduce PyTorch, TensorFlow, NumPy, or another ML framework without
+   explicit approval; this project is built to understand the engine from
+   scratch.
+F. Keep existing public APIs working or document and test any intentional break.
+G. Add tests for correctness, dimension errors, edge cases, and numeric stability.
+H. Benchmark both isolated kernels and complete training steps.
+I. Use the same hardware, compiler settings, model, data, batch sizes, and
+   repeat counts for before/after comparisons.
+J. Separate training and validation data. Check generalization and generated
+   samples, not just training loss.
+K. Do not overwrite or delete checkpoint/data files without a clear reason.
+L. Avoid committing platform-specific compiled .so binaries unless explicitly
+   required by repository policy.
+M. Before implementing a major algorithm change, explain:
+   - the mathematical idea;
+   - the exact files to change;
+   - expected benefits and risks;
+   - test plan and benchmark plan;
+   - fallback path if the candidate is slower or less accurate.
+
+======================================================================
+9. ACCEPTANCE CHECKLIST FOR A MATRIX-MULTIPLICATION OPTIMIZATION
+======================================================================
+
+[ ] The original baseline kernel remains available for comparison.
+[ ] Candidate kernel returns correct shapes and values.
+[ ] Tests include rectangular and square matrices, small sizes, and edge cases.
+[ ] Numeric tolerances are justified and documented.
+[ ] No invalid dimensions, buffer overruns, or undefined behavior are introduced.
+[ ] The extension builds on the intended target environment.
+[ ] The complete test suite passes.
+[ ] Benchmarks include warm-up and multiple repeats.
+[ ] Results include matrix dimensions, dtype, compiler, and hardware.
+[ ] Full training-step throughput is compared, not only kernel throughput.
+[ ] Validation loss and generated samples remain acceptable.
+[ ] Results report measured speedups rather than theoretical promises.
+
+======================================================================
+10. PRIMARY SOURCE FILES
+======================================================================
+
+README and architecture:
+https://github.com/OMARM100/SkeAI/blob/main/README.md
+
+C++ numerical engine:
+https://github.com/OMARM100/SkeAI/blob/main/cpp/skeai_engine.cpp
+
+Python numerical boundary:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/engine.py
+
+Tensor abstraction:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/tensor.py
+
+Tiny character language model:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/language_model.py
+
+Character dataset:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/dataset.py
+
+Tokenizer:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/tokenizer.py
+
+Training entry point:
+https://github.com/OMARM100/SkeAI/blob/main/training/train_tiny.py
+
+Trainer:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/trainer.py
+
+Optimizer:
+https://github.com/OMARM100/SkeAI/blob/main/src/skeai/optimizer.py
+
+Benchmark:
+https://github.com/OMARM100/SkeAI/blob/main/benchmarks/benchmark_engine.py
+
+Build script:
+https://github.com/OMARM100/SkeAI/blob/main/tools/build_cpp.py
+
+END OF SPECIFICATION
